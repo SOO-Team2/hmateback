@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import User, Resume, Career, Certificate, Interview, Dialogue, CL, Answer
+from app.routes.auth import router as auth_router
 
 app = FastAPI()
 
@@ -13,6 +14,11 @@ app.add_middleware( #요청 검사
   allow_methods=["*"], #GET, POST, PUT, DELETE 모두 허용
   allow_headers=["*"], #헤더 전부 허용
 )
+
+# 라우터 등록
+app.include_router(auth_router)
+
+
 
 @app.get("/users")
 def get_users(db: Session = Depends(get_db)):

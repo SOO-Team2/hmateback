@@ -5,3 +5,5 @@ psycopg[binary]==3.3.6
 python-dotenv==1.2.4
 pymupdf
 openai
+bcrypt # bcrypt: 사용자가 회원가입할 때 비밀번호를 DB에 그냥 글자 그대로 넣으면 보안상 심각한 문제가 되므로 안전하게 암호화하기 위해 사용
+pyjwt # pyjwt: 로그인한 사용자가 '나'임을 증명하는 '토큰(JWT)'을 만들고 나중에 그 토큰이 진짜인지 검증하기 위해 사용
