@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 from dotenv import load_dotenv
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 # .env 파일 로드
@@ -13,10 +13,12 @@ DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = os.getenv("DB_PORT")
 DB_NAME = os.getenv("DB_NAME")
-
 DB_URL = f"postgresql+psycopg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
 engine = create_engine(DB_URL, pool_pre_ping=True) #안 하면 단순 문자열, DB 연결 끊어졌는지 확인
+with engine.connect() as conn:
+  conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector")) #pgvector 활성화
+  conn.commit()
 
 # 세션 -> 동시 처리 가능
 Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
