@@ -13,7 +13,7 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 
 MODEL = "gpt-4.1-mini"
-MAX_RETRIES = 2 # 처음1번 + 재시도 2번(총 3번 요청)
+MAX_RETRIES = 2 # 재시도 2번(총 3번 요청)
 TIMEOUT_SECONDS = 60 # 응답 60초만 기다림
 
 KEYS = ["motivation", "growth", "personality", "plan"]
@@ -80,7 +80,6 @@ def ask_ai(base_messages, text_format, check_fn):
 
 # ---------------------------------------------------------------------------
 # 자소서 첨삭
-#
 # 자소서를 [문단-문장] 번호로 보내고, 모델은 "어느 문장을 어떻게 고칠지"를 번호로 답한다.
 # ---------------------------------------------------------------------------
 
@@ -115,8 +114,8 @@ def feedback_prompt(numbered, sentence_count):
     )
     user = f"[자기소개서]\n{numbered}\n\n고치면 좋은 문장을 골라 첨삭해라."
     return [
-        {"role": "system", "content": system},      # 1장: 규칙
-        {"role": "user", "content": user},          # 2장: 자소서
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},  
     ]
 
 # 첨삭 하나 검사
@@ -159,7 +158,7 @@ def check_feedback(result, index):
 
 def generate_feedback(sections):
 
-    numbered, index = number_cl(sections)           # 1. 번호 붙이기
+    numbered, index = number_cl(sections)           # 번호 붙이기
     if not index:
         raise ValueError("자소서가 비어 있다.")
     # 2. ask_ai에 지시문, FeedbackSet, 검사 방법을 넘긴다.
@@ -249,7 +248,7 @@ def check_spelling(result, index):
     return problems
 
 def generate_spelling(sections):
-    numbered, index = number_cl(sections)           # 1. 번호 붙이기
+    numbered, index = number_cl(sections)           # 번호 붙이기
     if not index:
         raise ValueError("자소서가 비어 있다.")
     # ask_ai에 지시문, SpellingSet, 검사 방법을 넘기기
