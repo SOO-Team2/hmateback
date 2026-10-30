@@ -1,4 +1,5 @@
 from sqlalchemy import Column, String, Integer, Boolean, Text, TIMESTAMP, LargeBinary, ForeignKey, func
+from pgvector.sqlalchemy import Vector
 from app.database import Base
 
 
@@ -74,3 +75,13 @@ class Answer(Base):
     growth = Column(Text)
     personality = Column(Text)
     plan = Column(Text)
+
+
+class PdfChunk(Base):
+    __tablename__ = "PDF_CHUNK"
+    chunk_id = Column(Integer, primary_key=True, autoincrement=True)
+    doctype = Column(String(50), nullable=False)
+    filename = Column(String(255))
+    index = Column(Integer, nullable=False) #청크 순서
+    content = Column(Text, nullable=False) #원문 텍스트
+    embedding = Column(Vector(1024))
