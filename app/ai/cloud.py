@@ -13,8 +13,8 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 
 MODEL = "gpt-4.1-mini"
-MAX_RETRIES = 2 # 재시도 2번(총 3번 요청)
-TIMEOUT_SECONDS = 60 # 응답 60초만 기다림
+MAX_RETRIES = 2  # 재시도 2번(총 3번 요청)
+TIMEOUT_SECONDS = 30  # 응답 30초만 기다림
 
 KEYS = ["motivation", "growth", "personality", "plan"]
 
@@ -22,26 +22,30 @@ KEYS = ["motivation", "growth", "personality", "plan"]
 # 공통 도구 (세 기능이 같이 씀)
 # ---------------------------------------------------------------------------
 
+
 # ((?<=[.!?])\s+) 기준 문장 나누기
 def split_sentences(text):
     return re.split(r"(?<=[.!?])\s+", text.strip())
 
-# 문장마다 [문단-문장] 번호 붙이기
+
+# 자소서의 모든 문장마다 [문단-문장] 번호 붙이기
 def number_cl(sections):
-    lines = []
-    index = {}
+    lines = []   # AI에게 보낼 줄들을 모을 list
+    index = {}   # 번호 → 원문 dict
     for i, key in enumerate(KEYS, 1):
         text = sections.get(key, "").strip()
         if not text:
             continue
         for j, sentence in enumerate(split_sentences(text), 1):
-            sid = f"{i}-{j}"
-            index[sid] = sentence
+            sid = f"{i}-{j}"   #  (sid = sentence id)
+            index[sid] = sentence 
             lines.append(f"[{sid}] {sentence}")
     return "\n".join(lines), index
 
+
 # OpenAI 연결(한 번!)
 _client = None
+
 
 def get_client():
     global _client
@@ -49,27 +53,28 @@ def get_client():
         _client = OpenAI(timeout=TIMEOUT_SECONDS)
     return _client
 
+
 # AI에게 묻고 → 검사 → 틀리면 다시 묻기 (최대 3번, 세 기능 공통)
-def ask_ai(base_messages, text_format, check_fn):
+def ask_ai(base_messages, text_format, check_answer):
 
     messages = base_messages
     result, problems = None, []
 
-    for _ in range(MAX_RETRIES + 1):                     # 최대 3번
-        response = get_client().responses.parse(         # AI에게 요청
-            model=MODEL,                                 # 어떤 AI에게
-            input=messages,                              # 무엇을
-            text_format=text_format,                     # 어떤 틀로 답할지
+    for _ in range(MAX_RETRIES + 1):  # 최대 3번
+        response = get_client().responses.parse(  # AI에게 요청
+            model=MODEL,  # 어떤 AI에게
+            input=messages,  # 무엇을
+            text_format=text_format,  # 어떤 틀로 답할지
         )
-        result = response.output_parsed                  # 틀에 맞춰 정리된 답 꺼내기
+        result = response.output_parsed  # 틀에 맞춰 정리된 답 꺼내기
         if result is not None:
-            problems = check_fn(result)                  # 답이 있으면 검사
+            problems = check_answer(result)  # 답이 있으면 검사
         else:
             problems = ["모델이 정해진 형식으로 답하지 않았다."]
         if not problems:
-            break                                        # 문제 없으면 끝
+            break  # 문제 없으면 끝
 
-        messages = base_messages + [                     # 다시 물을 준비
+        messages = base_messages + [  # 다시 물을 준비
             {
                 "role": "user",
                 "content": "이전 시도의 문제점이다. 이를 피해서 처음부터 다시 만들어라.\n- "
@@ -77,6 +82,7 @@ def ask_ai(base_messages, text_format, check_fn):
             }
         ]
     return result, problems
+
 
 # ---------------------------------------------------------------------------
 # 자소서 첨삭
@@ -86,19 +92,26 @@ def ask_ai(base_messages, text_format, check_fn):
 # 첨삭 3~5개
 MIN_FEEDBACKS, MAX_FEEDBACKS = 3, 5
 
+
+# 문장 수에 맞춘 첨삭 개수 범위
+def feedback_range(sentence_count):
+    return min(MIN_FEEDBACKS, sentence_count), min(MAX_FEEDBACKS, sentence_count)
+
+
 # AI 답의 틀
-class FeedbackItem(BaseModel):   # tag(둘 중 하나) + 문장 번호 + 수정안 + 이유
+class FeedbackItem(BaseModel):  # tag(둘 중 하나) + 문장 번호 + 수정안 + 이유
     tag: Literal["수정 필요", "문장 다듬기"]
     sentence_id: str
     suggestion: str
     reason: str
 
-class FeedbackSet(BaseModel):     # 첨삭 목록 담는 상자
+
+class FeedbackSet(BaseModel):  # 첨삭 목록 담는 상자
     feedbacks: list[FeedbackItem]
 
+
 def feedback_prompt(numbered, sentence_count):
-    minimum = min(MIN_FEEDBACKS, sentence_count)
-    maximum = min(MAX_FEEDBACKS, sentence_count)
+    minimum, maximum = feedback_range(sentence_count)
     system = (
         "너는 지원자의 자기소개서를 고쳐 주는 첨삭 전문가다. "
         f"자기소개서에서 고치면 좋은 문장을 {minimum}개에서 {maximum}개 고른다. "
@@ -115,8 +128,9 @@ def feedback_prompt(numbered, sentence_count):
     user = f"[자기소개서]\n{numbered}\n\n고치면 좋은 문장을 골라 첨삭해라."
     return [
         {"role": "system", "content": system},
-        {"role": "user", "content": user},  
+        {"role": "user", "content": user},
     ]
+
 
 # 첨삭 하나 검사
 def feedback_problem(f, index):
@@ -131,21 +145,21 @@ def feedback_problem(f, index):
         return f"[{f.sentence_id}]의 수정안에서 숫자가 원문과 다르다. 숫자는 그대로 둬야 한다."
     return None
 
+
 # 답 전체 검사
 def check_feedback(result, index):
 
     problems = []
     items = result.feedbacks
 
-    minimum = min(MIN_FEEDBACKS, len(index))
-    maximum = min(MAX_FEEDBACKS, len(index))
+    minimum, maximum = feedback_range(len(index))
     if not minimum <= len(items) <= maximum:
         problems.append(
             f"첨삭이 {len(items)}개다. {minimum}개에서 {maximum}개여야 한다."
         )
 
-    ids = [f.sentence_id for f in items]                    # ids : 번호들
-    dups = sorted({i for i in ids if ids.count(i) > 1})     # duplicates(중복)
+    ids = [f.sentence_id for f in items]  # ids : 번호들
+    dups = sorted({i for i in ids if ids.count(i) > 1})  # duplicates(중복)
     if dups:
         problems.append(f"같은 문장을 두 번 고쳤다: {dups}.")
 
@@ -156,9 +170,10 @@ def check_feedback(result, index):
 
     return problems
 
+
 def generate_feedback(sections):
 
-    numbered, index = number_cl(sections)           # 번호 붙이기
+    numbered, index = number_cl(sections)  # 번호 붙이기
     if not index:
         raise ValueError("자소서가 비어 있다.")
     # 2. ask_ai에 지시문, FeedbackSet, 검사 방법을 넘긴다.
@@ -187,6 +202,7 @@ def generate_feedback(sections):
         )
     return feedbacks, problems
 
+
 # ---------------------------------------------------------------------------
 # 맞춤법 검사
 # ---------------------------------------------------------------------------
@@ -194,13 +210,16 @@ def generate_feedback(sections):
 # 원문에서 5글자 넘게 바뀌면 거절 (임의로 정함)
 MAX_CHANGE = 5
 
+
 # AI 답의 틀
 class SpellingItem(BaseModel):
     sentence_id: str
     corrected: str
 
+
 class SpellingSet(BaseModel):
     fixes: list[SpellingItem]
+
 
 def spelling_prompt(numbered):
     system = (
@@ -216,10 +235,12 @@ def spelling_prompt(numbered):
         {"role": "user", "content": user},
     ]
 
+
 # 바뀐 글자수 세기
 def changed_chars(a, b):
     ops = difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes()
     return sum(max(i2 - i1, j2 - j1) for tag, i1, i2, j1, j2 in ops if tag != "equal")
+
 
 # 하나 검사
 def spelling_problem(f, index):
@@ -234,6 +255,7 @@ def spelling_problem(f, index):
         return f"[{f.sentence_id}]의 수정안이 원문과 너무 다르다. 맞춤법과 띄어쓰기만 고쳐야 한다."
     return None
 
+
 # 답 전체를 검사(문제를 모아서 AI에게 재요청)
 def check_spelling(result, index):
     problems = []
@@ -247,8 +269,9 @@ def check_spelling(result, index):
             problems.append(problem)
     return problems
 
+
 def generate_spelling(sections):
-    numbered, index = number_cl(sections)           # 번호 붙이기
+    numbered, index = number_cl(sections)  # 번호 붙이기
     if not index:
         raise ValueError("자소서가 비어 있다.")
     # ask_ai에 지시문, SpellingSet, 검사 방법을 넘기기
@@ -278,21 +301,25 @@ def generate_spelling(sections):
         )
     return fixes, problems
 
+
 # ---------------------------------------------------------------------------
 # 제목 추천
 # ---------------------------------------------------------------------------
 # 20자 이내, 1개
 MAX_TITLE_CHARS, TITLE_COUNT = 20, 1
 
+
 # AI 답의 틀
 class TitleSet(BaseModel):
     titles: list[str]
 
+
 # 제목 다듬기
 def clean_title(title):
     title = re.sub(r"\s+", " ", title).strip()  # 여러 칸 공백을 한 칸으로
-    title = title.strip("\"'“”‘’「」『』")       # 앞뒤 따옴표 떼기
-    return title.rstrip(".。!?").strip()        # 끝의 마침표, 느낌표, 물음표 떼기
+    title = title.strip("\"'“”‘’「」『』")  # 앞뒤 따옴표 떼기
+    return title.rstrip(".。!?").strip()  # 끝의 마침표, 느낌표, 물음표 떼기
+
 
 def title_prompt(text):
     system = (
@@ -309,6 +336,7 @@ def title_prompt(text):
         {"role": "user", "content": user},
     ]
 
+
 # 제목 하나 검사
 def title_problem(title, source):
 
@@ -319,6 +347,7 @@ def title_problem(title, source):
     if set(re.findall(r"\d+", title)) - set(re.findall(r"\d+", source)):
         return f"'{title}'에 자소서에 없는 숫자가 들어 있다."
     return None
+
 
 # 답 전체 검사
 def check_titles(result, source):
@@ -334,11 +363,12 @@ def check_titles(result, source):
         problems.append(f"쓸 수 있는 제목이 {valid}개다. {TITLE_COUNT}개여야 한다.")
     return problems
 
+
 def generate_titles(sections):
     _, index = number_cl(sections)
     if not index:
         raise ValueError("자소서가 비어 있다.")
-    source = "\n".join(index.values())      # 번호 붙은 글은 안 쓴다
+    source = "\n".join(index.values())  # 번호 붙은 글은 안 쓴다
     # ask_ai에 지시문, TitleSet, 검사 방법을 넘긴다.
     result, problems = ask_ai(
         title_prompt(source),
