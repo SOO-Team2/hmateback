@@ -2,9 +2,11 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+
 from app.ai.cloud import generate_feedback, generate_spelling, generate_titles
 from app.database import get_db
 from app.models import CL, Answer
+from app.routes.auth import get_current_user, security_scheme
 
 router = APIRouter()                            # 이 파일 주소들을 담을 상자
 logger = logging.getLogger("uvicorn.error")     # 오류를 서버 터미널에 적는 도구
@@ -16,25 +18,38 @@ class ClSections(BaseModel):
     personality: str = ""
     plan: str = ""
 
-# 화면(Cl.jsx)의 GUEST_LIMIT, MEMBER_LIMIT과 같이 바꿀 것
-GUEST_MAX_TOTAL_CHARS = 500  # 비회원 (화면 200자 + 공백 여유)
-MEMBER_MAX_TOTAL_CHARS = 7000  # 회원 (화면 5000자 + 공백 여유)
+# 화면(Cl.jsx)의 GUEST_LIMIT, MEMBER_LIMIT과 같이 바꿀 것 (공백 포함)
+GUEST_MAX_TOTAL_CHARS = 500  # 비회원
+MEMBER_MAX_TOTAL_CHARS = 7000  # 회원
 
-# TODO: (auth.py) 작성 후 수정할 것
 def check_length(sections, is_member=False):    # 글자 수 확인 (안 넘기면 비회원)
     data = sections.model_dump() # 4칸을 사전(dict)으로 바꿔주는 함수
     limit = MEMBER_MAX_TOTAL_CHARS if is_member else GUEST_MAX_TOTAL_CHARS
+    # 화면(Cl.jsx)과 똑같이 공백 포함으로 센다
     if sum(len(v) for v in data.values()) > limit:
         raise HTTPException(status_code=400, detail="자기소개서가 너무 깁니다.")
     return data
+
+# 토큰이 있으면 로그인한 사용자 id, 없거나 만료됐으면 None(비회원)
+# auth.py의 get_current_user는 토큰이 없으면 401을 내서, 비회원도 쓰는 첨삭에는 그대로 못 씀
+def current_user_id(
+    credentials=Depends(security_scheme),
+    db: Session = Depends(get_db),
+):
+    if not credentials:
+        return None
+    try:
+        return get_current_user(credentials, db).id
+    except HTTPException:
+        return None
 
 # ---------------------------------------------------------------------------
 # 자소서 첨삭
 # ---------------------------------------------------------------------------
 
 @router.post("/cl/feedback")
-def cl_feedback(sections: ClSections):
-    data = check_length(sections)                       # ① 글자 수 확인
+def cl_feedback(sections: ClSections, user_id=Depends(current_user_id)):
+    data = check_length(sections, is_member=user_id is not None)                       # ① 글자 수 확인
     try:
         feedbacks, problems = generate_feedback(data)   # ② cloud.py 함수 부르기
     except ValueError as e:                             # ③ 빈 자소서
@@ -50,8 +65,8 @@ def cl_feedback(sections: ClSections):
 # ---------------------------------------------------------------------------
 
 @router.post("/cl/spellcheck")
-def cl_spellcheck(sections: ClSections):
-    data = check_length(sections)
+def cl_spellcheck(sections: ClSections, user_id=Depends(current_user_id)):
+    data = check_length(sections, is_member=user_id is not None)
     try:
         fixes, problems = generate_spelling(data)
     except ValueError as e:
@@ -66,8 +81,8 @@ def cl_spellcheck(sections: ClSections):
 # ---------------------------------------------------------------------------
 
 @router.post("/cl/title")
-def cl_title(sections: ClSections):
-    data = check_length(sections)
+def cl_title(sections: ClSections, user_id=Depends(current_user_id)):
+    data = check_length(sections, is_member=user_id is not None)
     try:
         titles, _ = generate_titles(data)     #  남은 문제는 안 써서 _로 받고 버림
     except ValueError as e:
@@ -86,10 +101,6 @@ def cl_title(sections: ClSections):
 # 제목 + 4칸 (ClSections를 그대로 물려받고 제목만 더함)
 class ClSave(ClSections):
     title: str = ""
-
-# 로그인(auth.py)이 완성되면 실제 사용자 id를 꺼내기
-def current_user_id():
-    return None
 
 # CL 표(제목)와 ANSWER 표(4칸)에 한 번에 저장하고, 새 자소서 번호(cl_id)를 돌려준다
 # 둘 중 하나라도 실패하면 둘 다 취소해서, 제목만 저장되는 반쪽 데이터를 막는다
