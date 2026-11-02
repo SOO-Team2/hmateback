@@ -10,15 +10,36 @@ from app.models import PdfChunk
 
 router = APIRouter()
 
+resume_text = ""
+cl_text = ""
+
 @router.post("/pdf")
 async def upload_pdf(
-  file: UploadFile = File(...), # ...: 필수값, 파일 안 보내면 에러
-  doctype: str = Form(...),
+  job: str = Form(...),
+  resume: UploadFile = File(None),
+  cl: UploadFile = File(None),
   db: Session = Depends(get_db)
 ):
-  pdf_bytes = await file.read() # 010101...
-  save_pdf(db, doctype, file.filename, pdf_bytes)
-  return {"filename": file.filename, "doctype": doctype} # 프론트에 응답
+  global resume_text, cl_text
+  resume_text = ""
+  cl_text = ""
+
+  if resume:
+    resume_bytes = await resume.read()
+    resume_text = extract_text(resume_bytes)
+    save_pdf(db, "resume", resume.filename, resume_bytes, resume_text)
+  if cl:
+    cl_bytes = await cl.read()
+    cl_text = extract_text(cl_bytes)
+    save_pdf(db, "cl", cl.filename, cl_bytes, cl_text)
+
+  result = ask_question("지원 동기", job, resume_text, cl_text)
+  return {"question": result["question"], "evidences": result.get("evidences", [])} #프론트에 전달
+
+@router.post("/answer")
+def submit_answer(data: dict):
+  result = ask_question(data["category"], data["job"], resume_text, cl_text)
+  return {"question": result["question"], "evidences": result.get("evidences", [])} #다음 카테고리 질문
 
 LLM_URL     = 'http://127.0.0.1:11434/v1/chat/completions' #localhost보다 답변이 훨씬 빠름
 LLM_MODEL   = 'qwen2.5:7b-instruct-q4_K_M'
@@ -92,14 +113,14 @@ def embed(chunks):
   return chunks
 
 # 4. 저장
-def save_pdf(db, doctype: str, filename: str, pdf_bytes: bytes): #db = Session()
+def save_pdf(db, doctype: str, filename: str, pdf_bytes: bytes, text: str): #db = Session()
   hash = hashlib.md5(pdf_bytes).hexdigest()[:8] #파일 지문
   hash_name = f"{hash}_{filename}"
 
   if db.query(PdfChunk).filter_by(doctype=doctype, filename=hash_name).first():
     return
-  
-  chunks = embed(chunking(extract_text(pdf_bytes)))
+
+  chunks = embed(chunking(text))
   for chunk in chunks:
     row = PdfChunk(
       doctype=doctype,
@@ -111,3 +132,108 @@ def save_pdf(db, doctype: str, filename: str, pdf_bytes: bytes): #db = Session()
     db.add(row)
 
   db.commit()
+
+# LLM 호출
+def call_llm(prompt: str, content: str) -> dict:
+  res = requests.post(
+    LLM_URL,
+    json={
+      "model": LLM_MODEL,
+      "messages": [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": content},
+      ],
+      "response_format": {"type": "json_object"},
+      "temperature": 0.3
+    }
+  )
+  content = res.json()["choices"][0]["message"]["content"]
+  return json.loads(content)
+
+PROMPT_CATEGORIES = {
+  "지원 동기": """
+지원자의 직무, 이력서, 자기소개서 내용을 바탕으로 '왜 우리 회사에 지원했는지' 그 동기를 파고드는 면접 질문 1개와 참고한 근거 문장을 추출해 주세요.
+
+[제약 사항]
+1. 면접관의 입장에서 질문할 것 (※ '귀사' 표현 금지, '우리 회사'나 '당사' 사용)
+2. '지원동기' 단계이므로, 오직 **과거와 현재의 선택 이유("왜 이 회사인가?", "왜 이 직무인가?")**에만 집중할 것.
+3. 절대 '입사 후 포부'나 미래 계획("입사해서 어떤 기여를 할 것인지", "향후 목표")에 대한 내용을 질문에 포함하지 말 것.
+4. 이력서·자기소개서에서 참고한 문장이 있다면 원문 문장 1개를 그대로 가져오고, 일반적인 질문을 하는 경우에는 빈 배열([])로 출력할 것.
+
+[출력 형식]
+다른 설명 없이 반드시 아래 JSON 객체 형식으로만 출력해 주세요.
+{
+  "question": "면접 질문 문장",
+  "evidences": [
+    "참고한 원문 문장 1"
+  ]
+}
+""",
+  "경험 및 역량": """
+지원자의 직무, 이력서, 자기소개서 내용을 바탕으로 직무 관련 프로젝트 경험과 기술 역량을 검증하는 면접 질문 1개와 참고한 근거 문장을 추출해 주세요.
+
+[제약 사항]
+1. 면접관의 입장에서 질문할 것 (※ '귀사' 표현 금지, '우리 회사'나 '당사' 사용)
+2. 이력서·자기소개서에 적힌 구체적인 프로젝트, 문제 해결 과정, 본인의 역할이나 기술적 선택 이유를 파고들 것.
+3. 이력서·자기소개서에서 참고한 문장이 있다면 원문 문장 1개를 그대로 가져오고, 일반적인 질문을 하는 경우에는 빈 배열([])로 출력할 것.
+
+[출력 형식]
+다른 설명 없이 반드시 아래 JSON 객체 형식으로만 출력해 주세요.
+{
+  "question": "면접 질문 문장",
+  "evidences": [
+    "참고한 원문 문장 1"
+  ]
+}
+""",
+  "인성 및 협업": """
+지원자의 직무, 이력서, 자기소개서 내용을 바탕으로 협업 태도, 소통 방식, 인성을 검증하는 면접 질문 1개와 참고한 근거 문장을 추출해 주세요.
+
+[제약 사항]
+1. 면접관의 입장에서 질문할 것 (※ '귀사' 표현 금지, '우리 회사'나 '당사' 사용)
+2. 팀원과의 협업 과정, 갈등 해결 경험, 또는 본인의 장단점이 드러나는 구체적인 사례를 물어볼 것.
+3. 이력서·자기소개서에서 참고한 문장이 있다면 원문 문장 1개를 그대로 가져오고, 일반적인 질문을 하는 경우에는 빈 배열([])로 출력할 것.
+
+[출력 형식]
+다른 설명 없이 반드시 아래 JSON 객체 형식으로만 출력해 주세요.
+{
+  "question": "면접 질문 문장",
+  "evidences": [
+    "참고한 원문 문장 1"
+  ]
+}
+""",
+  "입사 후 포부": """
+지원자의 직무, 이력서, 자기소개서 내용을 바탕으로 입사 후 포부와 성장 계획을 확인하는 면접 질문 1개와 참고한 근거 문장을 추출해 주세요.
+
+[제약 사항]
+1. 면접관의 입장에서 질문할 것 (※ '귀사' 표현 금지, '우리 회사'나 '당사' 사용)
+2. 입사 후 우리 회사에서 어떻게 기여할 것인지, 단기·장기적인 목표와 실천 계획을 구체적으로 물어볼 것.
+3. 이력서·자기소개서에서 참고한 문장이 있다면 원문 문장 1개를 그대로 가져오고, 일반적인 질문을 하는 경우에는 빈 배열([])로 출력할 것.
+
+[출력 형식]
+다른 설명 없이 반드시 아래 JSON 객체 형식으로만 출력해 주세요.
+{
+  "question": "면접 질문 문장",
+  "evidences": [
+    "참고한 원문 문장 1"
+  ]
+}
+"""
+}
+
+# 5. 질문
+def ask_question(category: str, job: str, resume_text: str, cl_text: str) -> dict:
+  prompt = PROMPT_CATEGORIES[category]
+
+  user_content = f"""
+[지원 직무]
+{job}
+
+[이력서]
+{resume_text}
+
+[자기소개서]
+{cl_text}
+"""
+  return call_llm(prompt, user_content)
