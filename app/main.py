@@ -1,9 +1,12 @@
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from app.database import get_db
+from app.database import get_db, Base, engine
 from app.models import User, Resume, Career, Certificate, Interview, Dialogue, CL, Answer
 from app.routes import cl, mypage, auth, interview
+from app.ai import local
+
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
@@ -18,37 +21,5 @@ app.add_middleware( #요청 검사
 app.include_router(cl.router)
 app.include_router(auth.router)
 app.include_router(mypage.router)
-#app.include_router(interview.router)
-
-@app.get("/users")
-def get_users(db: Session = Depends(get_db)):
-  users = db.query(User).all()
-  return users
-
-@app.get("/resumes")
-def get_resumes(db: Session = Depends(get_db)):
-  return db.query(Resume).all()
-
-@app.get("/careers")
-def get_careers(db: Session = Depends(get_db)):
-  return db.query(Career).all()
-
-@app.get("/certificates")
-def get_certificates(db: Session = Depends(get_db)):
-  return db.query(Certificate).all()
-
-@app.get("/interviews")
-def get_interviews(db: Session = Depends(get_db)):
-  return db.query(Interview).all()
-
-@app.get("/dialogues")
-def get_dialogues(db: Session = Depends(get_db)):
-  return db.query(Dialogue).all()
-
-@app.get("/cls")
-def get_cls(db: Session = Depends(get_db)):
-  return db.query(CL).all()
-
-@app.get("/answers")
-def get_answers(db: Session = Depends(get_db)):
-  return db.query(Answer).all()
+app.include_router(local.router)
+app.include_router(interview.router)
