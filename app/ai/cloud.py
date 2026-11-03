@@ -282,7 +282,7 @@ def generate_spelling(sections):
     )
     if result is None:
         return [], problems
-    # 통과한 것만 카드로. 이유는 고정 문구.
+    # 통과한 것만 카드로.
     fixes = []
     for f in result.fixes:
         if spelling_problem(f, index):  #  "문제 있는 항목은 화면에 안 보내기"
@@ -296,7 +296,6 @@ def generate_spelling(sections):
                 "section": KEYS[paragraph - 1],
                 "original": original,
                 "suggestion": f.corrected,
-                "reason": "맞춤법을 바로잡았어요.",
             }
         )
     return fixes, problems
