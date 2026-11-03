@@ -1,6 +1,6 @@
 import logging
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -234,6 +234,15 @@ async def save_resume_pdf(
         raise HTTPException(status_code=500, detail="저장하지 못했습니다.")
     return pdf_to_dict(resume)
 
+# 저장된 이력서 PDF 파일 자체를 돌려준다 (AI 면접에서 가져오기용)
+@router.get("/resume/pdf")
+def get_resume_pdf(
+    db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    resume = db.query(Resume).filter(Resume.id == user.id).first()
+    if not resume or not resume.pdf_file:
+        raise HTTPException(status_code=404, detail="저장된 이력서 PDF가 없어요.")
+    return Response(content=resume.pdf_file, media_type="application/pdf")
 
 @router.delete("/resume/pdf")
 def delete_resume_pdf(
