@@ -4,7 +4,6 @@ from sqlalchemy.orm import Session
 from app.database import get_db, Base, engine
 from app.models import User, Resume, Career, Certificate, Interview, Dialogue, CL, Answer
 from app.routes import cl, mypage, auth, interview
-from app.ai import local
 
 Base.metadata.create_all(bind=engine)
 
@@ -21,5 +20,4 @@ app.add_middleware( #요청 검사
 app.include_router(cl.router)
 app.include_router(auth.router)
 app.include_router(mypage.router)
-app.include_router(local.router)
 app.include_router(interview.router)
