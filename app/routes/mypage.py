@@ -114,9 +114,9 @@ class CertificateIn(BaseModel):
     org: str = Field("", max_length=100)
 
 class ResumeIn(BaseModel):
-    name: str = Field(..., min_length=1, max_length=50)
-    school: str = Field(..., min_length=1, max_length=100)
-    major: str = Field(..., min_length=1, max_length=100)
+    name: str = Field(..., max_length=50)
+    school: str = Field(..., max_length=100)
+    major: str = Field(..., max_length=100)
     skill: str = Field("", max_length=255)
     careers: List[CareerIn] = []
     certificates: List[CertificateIn] = []

@@ -288,13 +288,12 @@ def generate_spelling(sections):
         if spelling_problem(f, index):  #  "문제 있는 항목은 화면에 안 보내기"
             continue
         paragraph = int(f.sentence_id.split("-")[0])
-        original = index[f.sentence_id]
         fixes.append(
             {
                 "tag": "맞춤법",
                 "sentence_id": f.sentence_id,
                 "section": KEYS[paragraph - 1],
-                "original": original,
+                "original": index[f.sentence_id],
                 "suggestion": f.corrected,
             }
         )
@@ -305,12 +304,12 @@ def generate_spelling(sections):
 # 제목 추천
 # ---------------------------------------------------------------------------
 # 20자 이내, 1개
-MAX_TITLE_CHARS, TITLE_COUNT = 20, 1
+MAX_TITLE_CHARS = 20
 
 
 # AI 답의 틀
-class TitleSet(BaseModel):
-    titles: list[str]
+class TitleResult(BaseModel):
+    title: str
 
 
 # 제목 다듬기
@@ -322,64 +321,41 @@ def clean_title(title):
 
 def title_prompt(text):
     system = (
-        f"너는 자기소개서에 어울리는 제목을 지어 주는 전문가다. 자기소개서를 읽고 제목 후보를 {TITLE_COUNT}개 만든다. "
-        f"제목은 한 줄이고 {MAX_TITLE_CHARS}자 이내로 짧게 쓴다. "
+        "너는 자기소개서에 어울리는 제목을 지어 주는 전문가다. "
+        f"자기소개서를 읽고 한 줄짜리 제목을 {MAX_TITLE_CHARS}자 이내로 짧게 쓴다. "
         "자기소개서의 핵심 경험이나 지원 동기가 드러나게 쓴다. "
         "자기소개서에 없는 사실, 경력, 숫자를 만들어 넣지 않는다. "
-        "서로 다른 방향으로 쓰고, 같은 제목을 반복하지 않는다. "
         "따옴표, 마침표, 이모지는 쓰지 않는다. "
     )
-    user = f"[자기소개서]\n{text}\n\n제목 후보 {TITLE_COUNT}개를 만들어라."
+    user = f"[자기소개서]\n{text}\n\n제목을 만들어라."
     return [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
     ]
 
 
-# 제목 하나 검사
-def title_problem(title, source):
-
-    if not title:
-        return "빈 제목이 있다."
-    if len(title) > MAX_TITLE_CHARS:
-        return f"'{title}'은 {len(title)}자다. {MAX_TITLE_CHARS}자 이내여야 한다."
-    if set(re.findall(r"\d+", title)) - set(re.findall(r"\d+", source)):
-        return f"'{title}'에 자소서에 없는 숫자가 들어 있다."
-    return None
-
-
-# 답 전체 검사
-def check_titles(result, source):
-    problems = []
-    valid = 0
-    for t in (clean_title(x) for x in result.titles):
-        problem = title_problem(t, source)
-        if problem:
-            problems.append(problem)
-            continue
-        valid += 1
-    if valid < TITLE_COUNT:
-        problems.append(f"쓸 수 있는 제목이 {valid}개다. {TITLE_COUNT}개여야 한다.")
-    return problems
+# 제목 검사
+def check_title(result, source):
+    t = clean_title(result.title)
+    if not t:
+        return ["빈 제목이다."]
+    if len(t) > MAX_TITLE_CHARS:
+        return [f"'{t}'은 {len(t)}자다. {MAX_TITLE_CHARS}자 이내여야 한다."]
+    if set(re.findall(r"\d+", t)) - set(re.findall(r"\d+", source)):
+        return [f"'{t}'에 자기소개서에 없는 숫자가 들어 있다."]
+    return []
 
 
 def generate_titles(sections):
     _, index = number_cl(sections)
     if not index:
-        raise ValueError("자소서가 비어 있다.")
-    source = "\n".join(index.values())  # 번호 붙은 글은 안 쓴다
-    # ask_ai에 지시문, TitleSet, 검사 방법을 넘긴다.
+        raise ValueError("자기소개서가 비어 있다.")
+    source = "\n".join(index.values())
     result, problems = ask_ai(
         title_prompt(source),
-        TitleSet,
-        lambda r: check_titles(r, source),
+        TitleResult,
+        lambda r: check_title(r, source),
     )
-    if result is None:
+    if result is None or problems:
         return [], problems
-
-    titles = []
-    for t in (clean_title(x) for x in result.titles):
-        if title_problem(t, source):
-            continue
-        titles.append(t)
-    return titles[:TITLE_COUNT], problems
+    return [clean_title(result.title)], problems
