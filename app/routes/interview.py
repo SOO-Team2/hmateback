@@ -9,49 +9,48 @@ from app.ai.local import chunking, embed, ask_question
 
 router = APIRouter()
 
-resume_text = ""
-cl_text = ""
-
-
 @router.post("/question")
-async def first_question(
+def first_question(
     job: str = Form(...),
     resume: UploadFile = File(None),
-    resume_saved: str = Form(None),  # 마이페이지 양식 이력서 글
+    resume_saved: str = Form(None),
     cl: UploadFile = File(None),
-    cl_saved: str = Form(None),  # 마이페이지에서 고른 자소서 글
+    cl_saved: str = Form(None),
     db: Session = Depends(get_db),
 ):
-    global resume_text, cl_text
-    resume_text = ""
-    cl_text = ""
+    filenames = []
 
     if resume:
-        resume_bytes = await resume.read()
+        resume_bytes = resume.read()
         resume_text = extract_text(resume_bytes)
-        save_pdf(db, "resume", resume.filename, resume_bytes, resume_text)
+        filenames.append(save_pdf(db, "resume", resume.filename, resume_bytes, resume_text))
     elif resume_saved:
-        resume_text = resume_saved  # 이미 글이라 PDF 추출 필요 없음
-    if cl:
-        cl_bytes = await cl.read()
-        cl_text = extract_text(cl_bytes)
-        save_pdf(db, "cl", cl.filename, cl_bytes, cl_text)
-    elif cl_saved:
-        cl_text = cl_saved  # 이미 글이라 PDF 추출 필요 없음
+        filenames.append(save_pdf(db, "resume", "resume_saved", resume_saved.encode(), resume_saved))
 
-    result = ask_question("지원 동기", job, resume_text, cl_text)
+    if cl:
+        cl_bytes = cl.read()
+        cl_text = extract_text(cl_bytes)
+        filenames.append(save_pdf(db, "cl", cl.filename, cl_bytes, cl_text))
+    elif cl_saved:
+        filenames.append(save_pdf(db, "cl", "cl_saved", cl_saved.encode(), cl_saved))
+
+    evidences = search_chunks(db, filenames, f"{job} 지원 동기")
+    result = ask_question("지원 동기", job, evidences)
     return {
         "question": result["question"],
-        "evidences": result.get("evidences", []),
+        "evidences": evidences,
+        "filenames": filenames,
     }  # 프론트에 전달
 
 
 @router.post("/answer")
-def submit_answer(data: dict):
-    result = ask_question(data["category"], data["job"], resume_text, cl_text)
+def submit_answer(data: dict, db: Session = Depends(get_db)):
+    filenames = data.get("filenames", [])
+    evidences = search_chunks(db, filenames, f"{data['job']} {data['category']}")
+    result = ask_question(data["category"], data["job"], evidences)
     return {
         "question": result["question"],
-        "evidences": result.get("evidences", []),
+        "evidences": evidences,
     }  # 다음 카테고리 질문
 
 
@@ -66,12 +65,12 @@ def extract_text(pdf_bytes) -> str:
 # 4. 저장
 def save_pdf(
     db, doctype: str, filename: str, pdf_bytes: bytes, text: str
-):  # db = Session()
+) -> str:  # db = Session()
     hash = hashlib.md5(pdf_bytes).hexdigest()[:8]  # 파일 지문
     hash_name = f"{hash}_{filename}"
 
     if db.query(PdfChunk).filter_by(doctype=doctype, filename=hash_name).first():
-        return
+        return hash_name
 
     chunks = embed(chunking(text))
     for chunk in chunks:
@@ -85,3 +84,20 @@ def save_pdf(
         db.add(row)
 
     db.commit()
+    return hash_name
+
+
+# 원문 청크 검색
+def search_chunks(db: Session, filenames: list[str], query: str, top_k: int = 1) -> list[str]:
+    if not filenames:
+        return []
+
+    query_vec = embed([{"content": query}])[0]["embedding"]
+    rows = (
+        db.query(PdfChunk)
+        .filter(PdfChunk.filename.in_(filenames))
+        .order_by(PdfChunk.embedding.cosine_distance(query_vec))
+        .limit(top_k)
+        .all()
+    )
+    return [row.content for row in rows]
