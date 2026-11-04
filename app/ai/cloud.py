@@ -2,11 +2,8 @@ import re
 import difflib
 from typing import Literal
 
-from dotenv import load_dotenv
 from openai import OpenAI
 from pydantic import BaseModel
-
-load_dotenv()
 
 # ---------------------------------------------------------------------------
 # 공통 설정
@@ -25,7 +22,7 @@ KEYS = ["motivation", "growth", "personality", "plan"]
 
 # ((?<=[.!?])\s+) 기준 문장 나누기
 def split_sentences(text):
-    return re.split(r"(?<=[.!?])\s+", text.strip())
+    return re.split(r"(?<=[.!?])\s+", text)
 
 
 # 자소서의 모든 문장마다 [문단-문장] 번호 붙이기
@@ -33,7 +30,7 @@ def number_cl(sections):
     lines = []   # AI에게 보낼 줄들을 모을 list
     index = {}   # 번호 → 원문 dict
     for i, key in enumerate(KEYS, 1):
-        text = sections.get(key, "").strip()
+        text = sections[key].strip()
         if not text:
             continue
         for j, sentence in enumerate(split_sentences(text), 1):
@@ -58,7 +55,6 @@ def get_client():
 def ask_ai(base_messages, text_format, check_answer):
 
     messages = base_messages
-    result, problems = None, []
 
     for _ in range(MAX_RETRIES + 1):  # 최대 3번
         response = get_client().responses.parse(  # AI에게 요청
@@ -137,7 +133,7 @@ def feedback_problem(f, index):
     original = index.get(f.sentence_id)
     if original is None:
         return f"문장 번호 [{f.sentence_id}]는 자소서에 없는 번호다."
-    if f.suggestion.strip() == original.strip():
+    if f.suggestion.strip() == original:
         return f"[{f.sentence_id}]의 수정안이 원문과 같다."
     if not f.reason.strip():
         return f"[{f.sentence_id}]에 수정 이유가 없다."
@@ -176,7 +172,7 @@ def generate_feedback(sections):
     numbered, index = number_cl(sections)  # 번호 붙이기
     if not index:
         raise ValueError("자소서가 비어 있다.")
-    # 2. ask_ai에 지시문, FeedbackSet, 검사 방법을 넘긴다.
+    # ask_ai에 지시문, FeedbackSet, 검사 방법을 넘긴다.
     result, problems = ask_ai(
         feedback_prompt(numbered, len(index)),
         FeedbackSet,
@@ -184,7 +180,7 @@ def generate_feedback(sections):
     )
     if result is None:
         return [], problems
-    # 3. 통과한 것만 카드로
+    # 통과한 것만 카드로
     feedbacks = []
     for f in result.feedbacks:
         if feedback_problem(f, index):
@@ -247,7 +243,7 @@ def spelling_problem(f, index):
     original = index.get(f.sentence_id)
     if original is None:
         return f"문장 번호 [{f.sentence_id}]는 자소서에 없는 번호다."
-    if f.corrected.strip() == original.strip():
+    if f.corrected.strip() == original:
         return f"[{f.sentence_id}]의 수정안이 원문과 같다. 틀린 곳이 없으면 결과에 넣지 마라."
     if sorted(re.findall(r"\d+", f.corrected)) != sorted(re.findall(r"\d+", original)):
         return f"[{f.sentence_id}]의 수정안에서 숫자가 원문과 다르다. 숫자는 그대로 둬야 한다."
@@ -303,7 +299,7 @@ def generate_spelling(sections):
 # ---------------------------------------------------------------------------
 # 제목 추천
 # ---------------------------------------------------------------------------
-# 20자 이내, 1개
+# 제목은 20자 이내
 MAX_TITLE_CHARS = 20
 
 
@@ -356,6 +352,6 @@ def generate_titles(sections):
         TitleResult,
         lambda r: check_title(r, source),
     )
-    if result is None or problems:
+    if problems:
         return [], problems
     return [clean_title(result.title)], problems
