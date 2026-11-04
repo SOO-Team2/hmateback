@@ -53,6 +53,29 @@ class CheckIdResponse(BaseModel):
     available: bool  # 사용 가능 여부 (True: 사용 가능, False: 중복)
     message: str    # 안내 메시지
 
+# 아이디 찾기 요청 양식
+class FindIdRequest(BaseModel):
+    email: str = Field(..., description="가입 시 등록한 이메일 주소")
+
+
+# 아이디 찾기 응답 양식
+class FindIdResponse(BaseModel):
+    id: str = Field(..., description="조회된 사용자 아이디")
+    message: str = Field("등록된 아이디를 성공적으로 찾았습니다.", description="안내 메시지")
+
+
+# 비밀번호 재설정 요청 양식
+class ResetPasswordRequest(BaseModel):
+    id: str = Field(..., min_length=2, max_length=50, description="사용자 아이디")
+    email: str = Field(..., description="가입 시 등록한 이메일 주소")
+    new_pw: str = Field(..., min_length=4, description="새로운 비밀번호 (최소 4자 이상)")
+
+
+# 비밀번호 재설정 응답 양식
+class ResetPasswordResponse(BaseModel):
+    message: str = Field("비밀번호가 성공적으로 변경되었습니다.", description="안내 메시지")
+
+
 
 # 사용자 정보 반환용 응답 양식 (보안상 비밀번호는 제외)
 class UserResponse(BaseModel):
@@ -236,3 +259,47 @@ def get_me(current_user: User = Depends(get_current_user)):
 def logout(current_user: User = Depends(get_current_user)):
 
     return {"message": "로그아웃되었습니다.", "user_id": current_user.id}
+
+# 아이디 찾기
+# 이메일을 입력하면 DB를 조회한후 아이디가 존재하면 아이디를 반환하고 없으면 404
+@router.post("/find-id", response_model=FindIdResponse, summary="아이디 찾기")
+def find_id(req: FindIdRequest, db: Session = Depends(get_db)):
+    """
+    가입 시 등록한 이메일 주소로 사용자 아이디를 찾습니다.
+    """
+    email_clean = req.email.strip()
+    user = db.query(User).filter(User.email == email_clean).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="해당 이메일로 가입된 계정을 찾을 수 없습니다.",
+        )
+    return FindIdResponse(
+        id=user.id,
+        message="등록된 아이디를 성공적으로 찾았습니다.",
+    )
+
+# 비밀번호 재설정
+# 아이디, 이메일, 새로운 비밀번호를 입력하면 아이디와 이메일이 일치하는지 확인한 후 
+# 새로운 비밀번호를 암호화하고 DB에 저장합니다. 마지막에 완료메시지 반환합니다.
+@router.post("/reset-password", response_model=ResetPasswordResponse, summary="비밀번호 재설정")
+def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)):
+    """
+    아이디와 이메일이 일치하는 계정을 확인한 후 새 비밀번호로 즉시 재설정합니다.
+    """
+    id_clean = req.id.strip()
+    email_clean = req.email.strip()
+
+    user = db.query(User).filter(User.id == id_clean, User.email == email_clean).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="아이디 또는 이메일 정보가 일치하지 않습니다.",
+        )
+
+    user.pw = hash_password(req.new_pw)
+    db.commit()
+
+    return ResetPasswordResponse(
+        message="비밀번호가 성공적으로 변경되었습니다. 새 비밀번호로 로그인해 주세요.",
+    )
