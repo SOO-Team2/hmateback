@@ -176,3 +176,73 @@ def ask_question(category: str, job: str, evidences: list[str]) -> dict:
   result["question"] = re.sub(r"귀\s*사", "우리 회사", result["question"])
   result["question"] = result["question"].replace("생각하신가요", "생각하시나요")
   return result
+
+
+
+VERIFY_PROMPT = """
+지원자의 면접 답변과 서류 원문을 비교해, 같은 사실의 내용이 서로 다른 부분만 찾아 주세요.
+
+[판단 규칙]
+1. 숫자, 기간, 인원, 역할, 사용 기술처럼 확인할 수 있는 사실이 서로 다를 때만 불일치로 판단할 것.
+2. 서류에 없는 내용을 답변에서 새로 말하거나, 서류 내용을 답변에서 말하지 않은 것은 불일치가 아님.
+3. 표현이나 말투가 달라도 뜻이 같으면 불일치가 아님.
+4. 불일치가 없으면 빈 배열([])로 출력할 것.
+5. document와 answer에는 문장을 그대로 옮기지 말고, 서로 다른 사실만 15자 이내의 짧은 구절로 쓸 것.
+  - 예: 서류에 "프로젝트를 3개월 진행했습니다", 답변에 "프로젝트를 6개월 진행했습니다"라면 document는 "프로젝트 기간 3개월", answer는 "프로젝트 기간 6개월"
+
+[출력 형식]
+다른 설명 없이 반드시 아래 JSON 객체 형식으로만 출력해 주세요.
+{
+  "mismatches": [
+    {"document": "서류의 다른 사실", "answer": "답변의 다른 사실"}
+  ]
+}
+"""
+
+
+# 답변과 서류 비교
+def check_answer(answer: str, evidences: list[str]) -> list[dict]:
+  if not evidences:
+    return []
+
+  context = "\n\n".join(evidences)
+  user_content = f"""
+[서류 원문]
+{context}
+
+[면접 답변]
+{answer}
+"""
+  result = call_llm(VERIFY_PROMPT, user_content)
+  return [m for m in result.get("mismatches", []) if is_conflict(m)]
+
+
+CONFLICT_PROMPT = """
+서류 내용과 면접 답변이 같은 대상에 대한 사실로서 서로 모순되는지 판단해 주세요.
+
+[판단 규칙]
+1. 두 내용이 동시에 사실일 수 없을 때만 true로 판단할 것.
+2. 서로 다른 이야기를 하고 있거나, 답변이 내용을 덧붙이는 것뿐이면 false로 판단할 것.
+3. 표현만 다르고 뜻이 같으면 false로 판단할 것.
+
+[예시]
+- 서류: 프로젝트 기간 3개월 / 답변: 프로젝트 기간 6개월 -> true
+- 서류: 기획 담당 / 답변: 디자인 담당 -> true
+- 서류: 고객과 갈등이 있었음 / 답변: 회의를 제안함 -> false
+- 서류: 3개월 진행 / 답변: 석 달 동안 진행 -> false
+
+[출력 형식]
+다른 설명 없이 반드시 아래 JSON 객체 형식으로만 출력해 주세요.
+{"conflict": true 또는 false}
+"""
+
+
+# 2차 확인: 두 내용이 동시에 사실일 수 없을 때만 불일치로 인정
+def is_conflict(mismatch: dict) -> bool:
+  document = str(mismatch.get("document", "")).strip()
+  answer = str(mismatch.get("answer", "")).strip()
+  if not document or not answer:
+    return False
+
+  result = call_llm(CONFLICT_PROMPT, f"\n서류: {document}\n답변: {answer}\n")
+  return result.get("conflict") is True

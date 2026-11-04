@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import PdfChunk
-from app.ai.local import chunking, embed, ask_question
+from app.ai.local import chunking, embed, ask_question, check_answer
 
 router = APIRouter()
 
@@ -54,6 +54,19 @@ def submit_answer(data: dict, db: Session = Depends(get_db)):
         "evidences": evidences,
     }  # 다음 카테고리 질문
 
+
+@router.post("/verify")
+def verify_answer(data: dict, db: Session = Depends(get_db)):
+    filenames = data.get("filenames", [])
+    rows = search_rows(db, filenames, data["answer"])
+    if not rows:
+        return {"mismatches": []}
+
+    source = "이력서" if rows[0].doctype == "resume" else "자기소개서"
+    mismatches = check_answer(data["answer"], [clean_evidence(rows[0].content)])
+    for mismatch in mismatches:
+        mismatch["source"] = source  # 화면에 어느 서류인지 표시
+    return {"mismatches": mismatches}
 
 # 1. 추출
 def extract_text(pdf_bytes) -> str:
@@ -109,18 +122,23 @@ def save_pdf(
     return hash_name
 
 
-# 원문 청크 검색
-def search_chunks(db: Session, filenames: list[str], query: str, top_k: int = 1) -> list[str]:
+# 원문 청크 검색 (DB 행 그대로 돌려줌)
+def search_rows(db: Session, filenames: list[str], query: str, top_k: int = 1) -> list[PdfChunk]:
     if not filenames:
         return []
 
     query_vec = embed([{"content": query}])[0]["embedding"]
-    rows = (
+    return (
         db.query(PdfChunk)
         .filter(PdfChunk.filename.in_(filenames))
         .order_by(PdfChunk.embedding.cosine_distance(query_vec))
         .limit(top_k)
         .all()
     )
+
+
+# 원문 청크 검색 (화면에 보여 줄 글만 돌려줌)
+def search_chunks(db: Session, filenames: list[str], query: str, top_k: int = 1) -> list[str]:
+    rows = search_rows(db, filenames, query, top_k)
     cleaned = [clean_evidence(row.content) for row in rows]
     return [text for text in cleaned if text]
