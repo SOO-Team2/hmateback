@@ -1,4 +1,5 @@
 import hashlib
+import re
 import pymupdf
 import pymupdf4llm
 from fastapi import APIRouter, Depends, UploadFile, File, Form
@@ -21,20 +22,20 @@ def first_question(
     filenames = []
 
     if resume:
-        resume_bytes = resume.read()
+        resume_bytes = resume.file.read()
         resume_text = extract_text(resume_bytes)
         filenames.append(save_pdf(db, "resume", resume.filename, resume_bytes, resume_text))
     elif resume_saved:
         filenames.append(save_pdf(db, "resume", "resume_saved", resume_saved.encode(), resume_saved))
 
     if cl:
-        cl_bytes = cl.read()
+        cl_bytes = cl.file.read()
         cl_text = extract_text(cl_bytes)
         filenames.append(save_pdf(db, "cl", cl.filename, cl_bytes, cl_text))
     elif cl_saved:
         filenames.append(save_pdf(db, "cl", "cl_saved", cl_saved.encode(), cl_saved))
 
-    evidences = search_chunks(db, filenames, f"{job} 지원 동기")
+    evidences = search_chunks(db, filenames, "지원 동기")
     result = ask_question("지원 동기", job, evidences)
     return {
         "question": result["question"],
@@ -46,7 +47,7 @@ def first_question(
 @router.post("/answer")
 def submit_answer(data: dict, db: Session = Depends(get_db)):
     filenames = data.get("filenames", [])
-    evidences = search_chunks(db, filenames, f"{data['job']} {data['category']}")
+    evidences = search_chunks(db, filenames, data["category"])
     result = ask_question(data["category"], data["job"], evidences)
     return {
         "question": result["question"],
@@ -58,8 +59,29 @@ def submit_answer(data: dict, db: Session = Depends(get_db)):
 def extract_text(pdf_bytes) -> str:
     doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")  # 메모리에서 엶
     text = pymupdf4llm.to_markdown(doc)  # 폰트 크기 등 표시
+    for page in doc:
+        lines = []
+        for block in page.get_text("dict")["blocks"]:
+            for line in block.get("lines", []):
+                lines.append(("".join(s["text"] for s in line["spans"]), line["bbox"][2]))
+        right = max((x for _, x in lines), default=0)
+        for (current, x), (following, _) in zip(lines, lines[1:]):
+            # 오른쪽 끝까지 찼고, 공백 없이 한글로 끝나고, 다음 줄이 한글로 시작하면 잘린 단어
+            if x >= right - 15 and re.search(r"[가-힣]$", current) and re.match(r"[가-힣]", following):
+                tail = current.split()[-1]
+                head = following.split()[0]
+                text = re.sub(re.escape(tail) + r"\s+" + re.escape(head), lambda _: tail + head, text)
     doc.close()
     return text.strip()
+
+
+# 화면에 보여 줄 근거에서 제목과 마크다운 기호 지우기
+def clean_evidence(text: str) -> str:
+    text = re.sub(r"^\s*#+.*$", "", text, flags=re.M)  # # 제목 줄
+    text = re.sub(r"^\s*\[[^\]\n]+\]\s*", "", text, flags=re.M)  # [지원 동기] 같은 제목
+    text = text.replace("**", "")
+    return re.sub(r"\s+", " ", text).strip()
+
 
 
 # 4. 저장
@@ -100,4 +122,5 @@ def search_chunks(db: Session, filenames: list[str], query: str, top_k: int = 1)
         .limit(top_k)
         .all()
     )
-    return [row.content for row in rows]
+    cleaned = [clean_evidence(row.content) for row in rows]
+    return [text for text in cleaned if text]
