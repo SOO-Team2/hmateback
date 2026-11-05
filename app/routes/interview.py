@@ -39,7 +39,7 @@ def first_question(
     result = ask_question("지원 동기", job, evidences)
     return {
         "question": result["question"],
-        "evidences": evidences,
+        "evidences": result["evidences"],
         "filenames": filenames,
     }  # 프론트에 전달
 
@@ -56,7 +56,7 @@ def submit_answer(data: dict, db: Session = Depends(get_db)):
     result = ask_question(data["category"], data["job"], evidences, job_units)
     return {
         "question": result["question"],
-        "evidences": evidences,
+        "evidences": result["evidences"],
     }  # 다음 카테고리 질문
 
 
