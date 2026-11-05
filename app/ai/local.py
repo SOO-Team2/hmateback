@@ -175,8 +175,25 @@ def ask_question(category: str, job: str, evidences: list[str]) -> dict:
   result = call_llm(prompt, user_content)
   result["question"] = re.sub(r"귀\s*사", "우리 회사", result["question"])
   result["question"] = result["question"].replace("생각하신가요", "생각하시나요")
-  return result
 
+  # 질문과 가까운 원문 1문장 고르기
+  sentences = [
+    s.strip()
+    for ev in evidences
+    for s in re.split(r"(?<=[^0-9][.?!])\s+", ev)
+    if s.strip()
+  ]
+  if len(sentences) > 1:
+    items = embed([{"content": result["question"]}] + [{"content": s} for s in sentences])
+    q_vec = items[0]["embedding"]
+    best = max(
+      items[1:],
+      key=lambda item: sum(a * b for a, b in zip(q_vec, item["embedding"])),
+    )
+    sentences = [best["content"]]
+
+  result["evidences"] = sentences
+  return result
 
 
 VERIFY_PROMPT = """
