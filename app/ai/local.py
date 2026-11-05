@@ -112,7 +112,7 @@ PROMPT_CATEGORIES = {
   - '귀사', '저', '제'는 지원자가 쓰는 표현이므로 질문에 쓰지 말 것.
   - 나쁜 예: 귀사의 직무가 왜 제 경험과 강점을 살릴 수 있는 자리인가요?
   - 좋은 예: 지원자님의 경험과 강점이 우리 회사의 이 직무에 어떻게 도움이 된다고 생각하시나요?
-2. 참고 원문에 적힌 구체적인 프로젝트, 문제 해결 과정, 본인의 역할이나 기술적 선택 이유를 파고들 것.
+2. 참고 원문에 적힌 경험 하나만 골라 본인이 한 일, 판단 근거, 결과를 물을 것. 원문에 이미 답이 적힌 내용은 다시 묻지 말 것.
 3. 참고 원문이 '없음'인 경우 해당 직무에 맞는 일반적인 경험 및 역량 질문을 생성할 것.
 
 [출력 형식]
@@ -250,9 +250,20 @@ FOLLOWUP_PROMPTS = {
 """
 }
 
+JOB_UNIT_RULE = """
+[직무 역량 사용 규칙]
+1. [직무 역량]의 업무 하나만 골라, 수행해 본 경험이 있는지와 그때 맡은 역할을 물을 것.
+2. 지원자가 그 업무를 경험했다고 단정하지 말 것.
+  - 나쁜 예: 인사평가 경험을 가진 지원자님은 어떻게 생각하시나요?
+  - 좋은 예: 인사평가 업무를 수행해 본 경험이 있다면, 그때 맡은 역할을 말씀해 주시겠어요?
+3. 지원자를 평가하거나 칭찬하지 말고, 앞으로의 역할이나 계획을 묻지 말 것.
+4. [직무 역량]에 없는 기술명, 제품명, 법규, 수치는 쓰지 말 것.
+"""
+
+
 # 5. 질문
-def ask_question(category: str, job: str, evidences: list[str]) -> dict:
-  prompt = PROMPT_CATEGORIES[category]
+def ask_question(category: str, job: str, evidences: list[str], job_units: list[str] | None = None) -> dict:
+  prompt = PROMPT_CATEGORIES[category] + "\n질문은 반드시 한국어로만 쓰고, 중국어와 한자는 쓰지 말 것.\n"
   context = "\n\n".join(evidences) if evidences else "없음"
 
   user_content = f"""
@@ -262,11 +273,34 @@ def ask_question(category: str, job: str, evidences: list[str]) -> dict:
 [참고 원문]
 {context}
 """
+  if job_units:
+    prompt += JOB_UNIT_RULE
+    user_content += "\n[직무 역량]\n" + "\n".join(job_units) + "\n"
+
   result = call_llm(prompt, user_content)
+  if re.search(r"[\u4e00-\u9fff]", result["question"]):
+    result = call_llm(prompt, user_content)
   result["question"] = re.sub(r"귀\s*사", "우리 회사", result["question"])
   result["question"] = result["question"].replace("생각하신가요", "생각하시나요")
-  return result
 
+  # 질문과 가까운 원문 1문장 고르기
+  sentences = [
+    s.strip()
+    for ev in evidences
+    for s in re.split(r"(?<=[^0-9][.?!])\s+", ev)
+    if s.strip()
+  ]
+  if len(sentences) > 1:
+    items = embed([{"content": result["question"]}] + [{"content": s} for s in sentences])
+    q_vec = items[0]["embedding"]
+    best = max(
+      items[1:],
+      key=lambda item: sum(a * b for a, b in zip(q_vec, item["embedding"])),
+    )
+    sentences = [best["content"]]
+
+  result["evidences"] = sentences
+  return result
 
 
 VERIFY_PROMPT = """

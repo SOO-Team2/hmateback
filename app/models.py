@@ -89,3 +89,13 @@ class PdfChunk(Base):
     index = Column(Integer, nullable=False) #청크 순서
     content = Column(Text, nullable=False) #원문 텍스트
     embedding = Column(Vector(1024))
+
+class JobUnit(Base):
+    __tablename__ = "JOB_UNIT"
+    unit_id = Column(Integer, primary_key=True, autoincrement=True)
+    job = Column(String(50), nullable=False, index=True) #프론트 소분류 이름
+    ncs_detail = Column(String(100), nullable=False) #NCS 세분류
+    unit_name = Column(String(200), nullable=False) #능력단위명
+    definition = Column(Text, nullable=False) #능력단위 정의
+    ncs_code = Column(String(30)) #NCS 분류코드
+    embedding = Column(Vector(1024), nullable=False)

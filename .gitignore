@@ -1,3 +1,4 @@
 henv/
 .env
 __pycache__/
+app/ai/한국산업인력공단_직무NCS분류별정보.csv

@@ -5,7 +5,7 @@ import pymupdf4llm
 from fastapi import APIRouter, Depends, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import PdfChunk
+from app.models import PdfChunk, JobUnit
 from app.ai.local import chunking, embed, ask_question, check_answer
 
 router = APIRouter()
@@ -39,7 +39,7 @@ def first_question(
     result = ask_question("지원 동기", job, evidences)
     return {
         "question": result["question"],
-        "evidences": evidences,
+        "evidences": result["evidences"],
         "filenames": filenames,
     }  # 프론트에 전달
 
@@ -48,10 +48,15 @@ def first_question(
 def submit_answer(data: dict, db: Session = Depends(get_db)):
     filenames = data.get("filenames", [])
     evidences = search_chunks(db, filenames, data["category"])
-    result = ask_question(data["category"], data["job"], evidences)
+
+    job_units = []
+    if data["category"] == "경험 및 역량" and not evidences:
+        job_units = search_job_units(db, data["job"], data["job"])
+
+    result = ask_question(data["category"], data["job"], evidences, job_units)
     return {
         "question": result["question"],
-        "evidences": evidences,
+        "evidences": result["evidences"],
     }  # 다음 카테고리 질문
 
 
@@ -142,3 +147,15 @@ def search_chunks(db: Session, filenames: list[str], query: str, top_k: int = 1)
     rows = search_rows(db, filenames, query, top_k)
     cleaned = [clean_evidence(row.content) for row in rows]
     return [text for text in cleaned if text]
+
+# 직무에 맞는 NCS 능력단위 검색
+def search_job_units(db: Session, job: str, query: str, top_k: int = 3) -> list[str]:
+    query_vec = embed([{"content": query}])[0]["embedding"]
+    rows = (
+        db.query(JobUnit)
+        .filter(JobUnit.job == job)
+        .order_by(JobUnit.embedding.cosine_distance(query_vec))
+        .limit(top_k)
+        .all()
+    )
+    return [f"{row.unit_name}: {row.definition}" for row in rows]
