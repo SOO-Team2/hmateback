@@ -14,7 +14,7 @@ logger = logging.getLogger("uvicorn.error")     # 오류를 서버 터미널에 
 # 화면이 보내는 4칸의 모양
 class ClSections(BaseModel):
     motivation: str = ""
-    growth: str = ""
+    experience: str = ""
     personality: str = ""
     plan: str = ""
 
@@ -113,7 +113,7 @@ def save_cl(db, user_id, title, sections):
             Answer(
                 cl_id=cl.cl_id,
                 motivation=sections["motivation"],
-                growth=sections["growth"],
+                experience=sections["experience"],
                 personality=sections["personality"],
                 plan=sections["plan"],
             )

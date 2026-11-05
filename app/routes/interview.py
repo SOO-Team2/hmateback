@@ -63,12 +63,12 @@ def submit_answer(data: dict, db: Session = Depends(get_db)):
 @router.post("/verify")
 def verify_answer(data: dict, db: Session = Depends(get_db)):
     filenames = data.get("filenames", [])
-    rows = search_rows(db, filenames, data["answer"])
+    rows = search_rows(db, filenames, data["answer"], top_k=3)
     if not rows:
         return {"mismatches": []}
 
     source = "이력서" if rows[0].doctype == "resume" else "자기소개서"
-    mismatches = check_answer(data["answer"], [clean_evidence(rows[0].content)])
+    mismatches = check_answer(data["answer"], [clean_evidence(row.content) for row in rows])
     for mismatch in mismatches:
         mismatch["source"] = source  # 화면에 어느 서류인지 표시
     return {"mismatches": mismatches}
