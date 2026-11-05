@@ -10,3 +10,4 @@ pyjwt # pyjwt: 로그인한 사용자가 '나'임을 증명하는 '토큰(JWT)'�
 python-multipart #FormData 받기
 pgvector
 requests
+pandas
