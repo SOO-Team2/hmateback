@@ -302,6 +302,77 @@ def ask_question(category: str, job: str, evidences: list[str], job_units: list[
   result["evidences"] = sentences
   return result
 
+# ---------------------------------------------------------------------------
+# [2단계] 꼬리 질문 생성 함수 (규칙 강제 및 결과 정제)
+# 1. 지원동기 / 입사 후 포부: 답변이 충분하면 need_followup=False, 부족할 때만 질문 생성
+# 2. 경험 및 역량 / 인성 및 협업: 무조건 need_followup=True 필수 1개 보장
+# ---------------------------------------------------------------------------
+def ask_followup_question(
+    category: str,
+    job: str,
+    question: str,
+    answer: str,
+    evidences: list[str] | None = None,
+) -> dict:
+    """
+    지원자의 직전 질문과 답변을 분석하여 꼬리 질문을 생성하거나 건너뜁니다.
+    반환 형식: {"need_followup": bool, "question": str | None}
+    """
+    # 1. 해당 카테고리에 맞는 꼬리질문 프롬프트 준비
+    prompt = FOLLOWUP_PROMPTS.get(category, "")
+    prompt += "\n질문은 반드시 한국어로만 쓰고, 중국어와 한자는 쓰지 말 것.\n"
+
+    # 2. LLM에 전달할 사용자 컨텍스트 구성
+    user_content = f"""
+[지원 직무]
+{job}
+
+[이전 면접 질문]
+{question}
+
+[지원자의 답변]
+{answer}
+"""
+    if evidences:
+        user_content += f"""
+[참고 원문]
+{"\n\n".join(evidences)}
+"""
+
+    # 3. 로컬 LLM 호출
+    result = call_llm(prompt, user_content)
+
+    # 4. 한자 섞임 방지 (한자 발견 시 1회 재호출)
+    if result.get("question") and re.search(r"[\u4e00-\u9fff]", str(result["question"])):
+        result = call_llm(prompt, user_content)
+
+    need_followup = result.get("need_followup", False)
+    followup_q = result.get("question")
+
+    # 5. [규칙 보장] 경험/인성 카테고리는 필수 1개 강제 (LLM이 false를 냈을 경우 대비한 안전장치)
+    if category in ["경험 및 역량", "인성 및 협업"]:
+        need_followup = True
+        if not followup_q:
+            if category == "경험 및 역량":
+                followup_q = "해당 경험에서 지원자님이 맡으셨던 가장 핵심적인 역할과, 그 과정에서 해결한 기술적 문제는 무엇이었나요?"
+            else:
+                followup_q = "그 협업 과정에서 의견 충돌이나 소통의 어려움은 없으셨나요? 지원자님께서는 그 상황을 어떻게 조율하셨나요?"
+
+    # 6. 지원동기 / 포부에서 꼬리질문이 필요 없다고 판단한 경우 question을 null로 정리
+    if not need_followup:
+        return {"need_followup": False, "question": None}
+
+    # 7. 말투 필터링 ('귀사' -> '우리 회사', '생각하신가요' -> '생각하시나요')
+    if followup_q:
+        followup_q = re.sub(r"귀\s*사", "우리 회사", str(followup_q))
+        followup_q = followup_q.replace("생각하신가요", "생각하시나요").strip()
+
+    return {
+        "need_followup": True,
+        "question": followup_q,
+    }
+
+
 
 VERIFY_PROMPT = """
 지원자의 면접 답변과 서류 원문을 비교해, 같은 사실의 내용이 서로 다른 부분만 찾아 주세요.
