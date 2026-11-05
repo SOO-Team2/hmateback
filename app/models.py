@@ -76,7 +76,7 @@ class Answer(Base):
     answer_id = Column(Integer, primary_key=True, autoincrement=True)
     cl_id = Column(Integer, ForeignKey("CL.cl_id"), nullable=False)
     motivation = Column(Text)
-    growth = Column(Text)
+    experience = Column(Text)
     personality = Column(Text)
     plan = Column(Text)
 

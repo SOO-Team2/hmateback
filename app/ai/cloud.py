@@ -13,7 +13,7 @@ MODEL = "gpt-4.1-mini"
 MAX_RETRIES = 2  # 재시도 2번(총 3번 요청)
 TIMEOUT_SECONDS = 30  # 응답 30초만 기다림
 
-KEYS = ["motivation", "growth", "personality", "plan"]
+KEYS = ["motivation", "experience", "personality", "plan"]
 
 # ---------------------------------------------------------------------------
 # 공통 도구 (세 기능이 같이 씀)

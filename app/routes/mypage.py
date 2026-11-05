@@ -43,7 +43,7 @@ def cl_to_dict(db, cl):
         "cl_id": cl.cl_id,
         "title": cl.title,
         "motivation": answer.motivation if answer else "",
-        "growth": answer.growth if answer else "",
+        "experience": answer.experience if answer else "",
         "personality": answer.personality if answer else "",
         "plan": answer.plan if answer else "",
     }
@@ -80,7 +80,7 @@ def update_cl(
         db.add(answer)
 
     cl.title = title
-    for key, value in sections.items():  # motivation, growth, personality, plan
+    for key, value in sections.items():  # motivation, experience, personality, plan
         setattr(answer, key, value)
 
     db.commit()
