@@ -1,6 +1,6 @@
 import logging
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Response
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -152,7 +152,6 @@ def resume_to_dict(db, resume):
             for c in careers
         ],
         "certificates": [{"cert": c.cert, "org": c.org} for c in certs],
-        **pdf_to_dict(resume),
     }
 
 
@@ -196,65 +195,6 @@ def save_resume(
         logger.error("이력서 저장 실패: %s", type(e).__name__)
         raise HTTPException(status_code=500, detail="저장하지 못했습니다.")
     return resume_to_dict(db, resume)
-
-
-# 이력서 PDF: 한 사람당 하나 (새로 올리면 덮어씀)
-MAX_PDF_BYTES = 10 * 1024 * 1024  # 10MB (임의로 정함)
-
-
-# 화면에 줄 PDF 정보 (파일 자체는 크니까 이름만)
-def pdf_to_dict(resume):
-    return {"resume_filename": resume.pdf_name or ""}
-
-
-@router.put("/resume/pdf")
-async def save_resume_pdf(
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    data = await file.read()
-    filename = file.filename or ""
-    # 이름이 .pdf이고, 내용도 PDF로 시작하는지 확인
-    if not filename.lower().endswith(".pdf") or not data.startswith(b"%PDF"):
-        raise HTTPException(status_code=400, detail="PDF 파일만 올릴 수 있어요.")
-    if len(data) > MAX_PDF_BYTES:
-        raise HTTPException(status_code=400, detail="10MB 이하 파일만 올릴 수 있어요.")
-    try:
-        resume = db.query(Resume).filter(Resume.id == user.id).first()
-        if not resume:  # 이력서가 없으면 PDF만 담아 새로 만든다
-            resume = Resume(id=user.id)
-            db.add(resume)
-        resume.pdf_file = data
-        resume.pdf_name = filename
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        logger.error("이력서 PDF 저장 실패: %s", type(e).__name__)
-        raise HTTPException(status_code=500, detail="저장하지 못했습니다.")
-    return pdf_to_dict(resume)
-
-# 저장된 이력서 PDF 파일 자체를 돌려준다 (AI 면접에서 가져오기용)
-@router.get("/resume/pdf")
-def get_resume_pdf(
-    db: Session = Depends(get_db), user: User = Depends(get_current_user)
-):
-    resume = db.query(Resume).filter(Resume.id == user.id).first()
-    if not resume or not resume.pdf_file:
-        raise HTTPException(status_code=404, detail="저장된 이력서 PDF가 없어요.")
-    return Response(content=resume.pdf_file, media_type="application/pdf")
-
-@router.delete("/resume/pdf")
-def delete_resume_pdf(
-    db: Session = Depends(get_db), user: User = Depends(get_current_user)
-):
-    resume = db.query(Resume).filter(Resume.id == user.id).first()
-    if not resume or not resume.pdf_file:
-        raise HTTPException(status_code=404, detail="저장된 이력서 PDF가 없어요.")
-    resume.pdf_file = None
-    resume.pdf_name = None
-    db.commit()
-    return {"message": "삭제했어요."}
 
 
 # ---------------------------------------------------------------------------
