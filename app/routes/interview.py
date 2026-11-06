@@ -13,27 +13,27 @@ router = APIRouter()
 @router.post("/question")
 def first_question(
     job: str = Form(...),
-    resume: UploadFile = File(None),
-    resume_saved: str = Form(None),
-    cl: UploadFile = File(None),
-    cl_saved: str = Form(None),
+    resume_pdf: UploadFile = File(None),
+    my_resume: str = Form(None),
+    cl_pdf: UploadFile = File(None),
+    my_cl: str = Form(None),
     db: Session = Depends(get_db),
 ):
     filenames = []
 
-    if resume:
-        resume_bytes = resume.file.read()
+    if resume_pdf:
+        resume_bytes = resume_pdf.file.read()
         resume_text = extract_text(resume_bytes)
-        filenames.append(save_pdf(db, "resume", resume.filename, resume_bytes, resume_text))
-    elif resume_saved:
-        filenames.append(save_pdf(db, "resume", "resume_saved", resume_saved.encode(), resume_saved))
+        filenames.append(save_pdf(db, "resume", resume_pdf.filename, resume_bytes, resume_text))
+    elif my_resume:
+        filenames.append(save_pdf(db, "resume", "my_resume", my_resume.encode(), my_resume))
 
-    if cl:
-        cl_bytes = cl.file.read()
+    if cl_pdf:
+        cl_bytes = cl_pdf.file.read()
         cl_text = extract_text(cl_bytes)
-        filenames.append(save_pdf(db, "cl", cl.filename, cl_bytes, cl_text))
-    elif cl_saved:
-        filenames.append(save_pdf(db, "cl", "cl_saved", cl_saved.encode(), cl_saved))
+        filenames.append(save_pdf(db, "cl", cl_pdf.filename, cl_bytes, cl_text))
+    elif my_cl:
+        filenames.append(save_pdf(db, "cl", "my_cl", my_cl.encode(), my_cl))
 
     evidences = search_chunks(db, filenames, "지원 동기")
     result = ask_question("지원 동기", job, evidences)

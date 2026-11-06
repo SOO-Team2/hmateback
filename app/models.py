@@ -16,16 +16,12 @@ class User(Base):
 
 class Resume(Base):
     __tablename__ = "RESUME"
-    # 1) 기본 이력서
     id = Column(String(50), ForeignKey("USER.id"), primary_key=True)
     name = Column(String(50))
     school = Column(String(100))
     major = Column(String(100))
     skill = Column(String(255))
     portfolio = Column(LargeBinary)
-    # 2) PDF 이력서
-    pdf_file = Column(LargeBinary)
-    pdf_name = Column(String(255))
 
 
 class Career(Base):
