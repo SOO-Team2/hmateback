@@ -67,10 +67,14 @@ def verify_answer(data: dict, db: Session = Depends(get_db)):
     if not rows:
         return {"mismatches": []}
 
-    source = "이력서" if rows[0].doctype == "resume" else "자기소개서"
-    mismatches = check_answer(data["answer"], [clean_evidence(row.content) for row in rows])
-    for mismatch in mismatches:
-        mismatch["source"] = source  # 화면에 어느 서류인지 표시
+    mismatches = []
+    # 서류 종류별로 따로 비교해서, 경고마다 정확한 서류 이름을 붙인다
+    for doctype, source in (("resume", "이력서"), ("cl", "자기소개서")):
+        evidences = [clean_evidence(row.content) for row in rows if row.doctype == doctype]
+        for mismatch in check_answer(data["answer"], evidences):
+            mismatch["source"] = source  # 화면에 어느 서류인지 표시
+            mismatches.append(mismatch)
+    return {"mismatches": mismatches}
     return {"mismatches": mismatches}
 
 # 1. 추출
