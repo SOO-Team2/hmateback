@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import PdfChunk, JobUnit
-from app.ai.local import chunking, embed, ask_question, check_answer
+from app.ai.local import chunking, embed, ask_question, check_answer, ask_followup_question
 
 router = APIRouter()
 
@@ -58,6 +58,25 @@ def submit_answer(data: dict, db: Session = Depends(get_db)):
         "question": result["question"],
         "evidences": result["evidences"],
     }  # 다음 카테고리 질문
+
+
+# 꼬리 질문 생성 여부 판단 및 질문 반환
+@router.post("/followup")
+def followup_question(data: dict, db: Session = Depends(get_db)):
+    filenames = data.get("filenames", [])
+    evidences = search_chunks(db, filenames, data["category"])
+
+    result = ask_followup_question(
+        category=data["category"],
+        job=data["job"],
+        question=data["question"],
+        answer=data["answer"],
+        evidences=evidences,
+    )
+    return {
+        "is_followup": result["need_followup"],
+        "question": result["question"],
+    }
 
 
 @router.post("/verify")
