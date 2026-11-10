@@ -68,7 +68,7 @@ def submit_answer(data: dict, db: Session = Depends(get_db), user: User = Depend
     }  # 다음 카테고리 질문
 
 
-# 꼬리 질문 생성 여부 판단 및 질문 반환
+# 심층 질문 생성 여부 판단 및 질문 반환
 @router.post("/followup")
 def followup_question(data: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     filenames = data.get("filenames", [])
