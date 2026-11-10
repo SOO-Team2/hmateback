@@ -35,7 +35,7 @@ def first_question(
     elif my_cl:
         filenames.append(save_pdf(db, "cl", "my_cl", my_cl.encode(), my_cl))
 
-    evidences = search_chunks(db, filenames, "지원 동기 지원 계기 선택 이유")
+    evidences = search_chunks(db, filenames, "지원 동기")
     result = ask_question("지원 동기", job, evidences)
     return {
         "question": result["question"],
@@ -48,15 +48,7 @@ def first_question(
 def submit_answer(data: dict, db: Session = Depends(get_db)):
     filenames = data.get("filenames", [])
     category = data.get("category", "")
-    # 검색 키워드 보강
-    search_query_map = {
-        "지원 동기": "지원 동기 지원 계기 선택 이유",
-        "경험 및 역량": "경험 및 역량 직무 프로젝트 기술 역량 수행",
-        "인성 및 협업": "인성 협업 소통 갈등 해결 팀워크",
-        "입사 후 포부": "입사 후 포부 목표 성장 계획 미래 비전 실천",
-    }
-    search_query = search_query_map.get(category, category)
-    evidences = search_chunks(db, filenames, search_query)
+    evidences = search_chunks(db, filenames, category)
 
     job_units = []
     if category == "경험 및 역량" and not evidences:
