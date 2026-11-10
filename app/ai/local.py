@@ -1,14 +1,20 @@
+import os
 import json
 import re
 import requests
 
-LLM_URL     = 'http://127.0.0.1:11434/v1/chat/completions' #localhost보다 답변이 훨씬 빠름
-LLM_MODEL   = 'qwen2.5:7b-instruct-q4_K_M'
-EMBED_URL   = 'http://127.0.0.1:11434/v1/embeddings'
-EMBED_MODEL = 'bge-m3'
+LLM_URL = os.getenv("LLM_URL", "http://127.0.0.1:11434/v1/chat/completions")
+LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:7b-instruct-q4_K_M")
+EMBED_URL = os.getenv("EMBED_URL", "http://127.0.0.1:11434/v1/embeddings")
+EMBED_MODEL = os.getenv("EMBED_MODEL", "bge-m3")
+AI_TIMEOUT = int(os.getenv("AI_TIMEOUT", "60"))
+MAX_INPUT_TEXT_LENGTH = int(os.getenv("MAX_INPUT_TEXT_LENGTH", "10000"))
 
 # 2. 청킹
 def chunking(text):
+  if text and len(text) > MAX_INPUT_TEXT_LENGTH:
+    text = text[:MAX_INPUT_TEXT_LENGTH]
+
   prompt = """제공된 텍스트를 다음 규칙에 따라 청킹해 주세요.
 
 [규칙]
@@ -49,16 +55,30 @@ def chunking(text):
       ],
       "response_format": {"type": "json_object"}, #오직 JSON만 반환
       "temperature": 0.1
-    }
+    },
+    timeout=AI_TIMEOUT
   )
+  res.raise_for_status()
   content = res.json()["choices"][0]["message"]["content"]
-  data = json.loads(content) # str -> dict
+  try:
+    data = json.loads(content)
+  except json.JSONDecodeError:
+    match = re.search(r"\{.*\}", content, re.DOTALL)
+    if match:
+      data = json.loads(match.group(0))
+    else:
+      raise
   return data["chunks"]
 
 # 3. 임베딩
 def embed(chunks):
-  texts = [c["content"] for c in chunks]
-  res = requests.post(EMBED_URL, json={"model": EMBED_MODEL, "input": texts})
+  texts = [c["content"][:2000] for c in chunks]  # 임베딩 모델 컨텍스트 초과 방지
+  res = requests.post(
+    EMBED_URL,
+    json={"model": EMBED_MODEL, "input": texts},
+    timeout=AI_TIMEOUT
+  )
+  res.raise_for_status()
   embeddings = res.json()["data"]
 
   for chunk, emb in zip(chunks, embeddings):
@@ -68,6 +88,9 @@ def embed(chunks):
 
 # LLM 호출
 def call_llm(prompt: str, content: str) -> dict:
+  if content and len(content) > MAX_INPUT_TEXT_LENGTH:
+    content = content[:MAX_INPUT_TEXT_LENGTH]
+
   res = requests.post(
     LLM_URL,
     json={
@@ -78,10 +101,18 @@ def call_llm(prompt: str, content: str) -> dict:
       ],
       "response_format": {"type": "json_object"},
       "temperature": 0.3
-    }
+    },
+    timeout=AI_TIMEOUT
   )
-  content = res.json()["choices"][0]["message"]["content"]
-  return json.loads(content)
+  res.raise_for_status()
+  raw_content = res.json()["choices"][0]["message"]["content"]
+  try:
+    return json.loads(raw_content)
+  except json.JSONDecodeError:
+    match = re.search(r"\{.*\}", raw_content, re.DOTALL)
+    if match:
+      return json.loads(match.group(0))
+    raise
 
 PROMPT_CATEGORIES = {
   "지원 동기": """
@@ -425,7 +456,7 @@ def check_answer(answer: str, evidences: list[str]) -> list[dict]:
 {answer}
 """
   result = call_llm(VERIFY_PROMPT, user_content)
-  return [m for m in result.get("mismatches", []) if is_conflict(m)]
+  return [m for m in result.get("mismatches", []) if is_conflict(m, context, answer)]
 
 
 CONFLICT_PROMPT = """
@@ -449,11 +480,13 @@ CONFLICT_PROMPT = """
 
 
 # 2차 확인: 두 내용이 동시에 사실일 수 없을 때만 불일치로 인정
-def is_conflict(mismatch: dict) -> bool:
+# 짧은 구절만 보면 무슨 이야기인지 몰라서, 서류 원문과 답변 전체도 같이 보여 준다
+def is_conflict(mismatch: dict, context: str, answer_full: str) -> bool:
   document = str(mismatch.get("document", "")).strip()
   answer = str(mismatch.get("answer", "")).strip()
   if not document or not answer:
     return False
 
-  result = call_llm(CONFLICT_PROMPT, f"\n서류: {document}\n답변: {answer}\n")
+  content = f"\n[서류 원문]\n{context}\n\n[면접 답변]\n{answer_full}\n\n서류: {document}\n답변: {answer}\n"
+  result = call_llm(CONFLICT_PROMPT, content)
   return result.get("conflict") is True

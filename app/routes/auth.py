@@ -2,15 +2,15 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-import bcrypt # 비밀번호 암호화(해싱) 라이브러리
-import jwt    # 로그인 상태 유지 및 인증용 토큰(JWT) 라이브러리
+import bcrypt  # 비밀번호 암호화(해싱) 라이브러리
+import jwt  # 로그인 상태 유지 및 인증용 토큰(JWT) 라이브러리
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.database import get_db # DB 세션 생성 및 반환 함수
-from app.models import User     # USER 테이블 ORM 모델
+from app.database import get_db  # DB 세션 생성 및 반환 함수
+from app.models import User  # USER 테이블 ORM 모델
 
 # ==========================================
 # 1. 라우터 및 JWT 보안 기본 설정
@@ -19,9 +19,13 @@ from app.models import User     # USER 테이블 ORM 모델
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 # JWT 서명에 사용할 비밀키 (환경변수에 없으면 기본값 사용)
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "hmate-secret-key-2026-production")  
-ALGORITHM = "HS256"                     # 토큰 암호화 알고리즘
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24    # 토큰 유효 기간 (24시간)
+SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError(
+        "JWT_SECRET_KEY가 .env에 없습니다. 비밀키를 설정한 뒤 서버를 켜 주세요."
+    )
+ALGORITHM = "HS256"  # 토큰 암호화 알고리즘
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 토큰 유효 기간 (24시간)
 
 # 요청 헤더의 'Authorization: Bearer <토큰>' 값을 추출하기 위한 스키마
 security_scheme = HTTPBearer(auto_error=False)
@@ -32,14 +36,19 @@ security_scheme = HTTPBearer(auto_error=False)
 # 프론트엔드와 주고받는 데이터의 형태를 검증하고 정의합니다.
 # ==========================================
 
+
 # 회원가입 요청 시 프론트엔드에서 보내주는 데이터 양식
 class SignupRequest(BaseModel):
-    id: str = Field(..., min_length=2, max_length=50, description="사용자 아이디 (2~50자)")
-    pw: str = Field(..., min_length=4, description="비밀번호 (최소 4자 이상)")
+    id: str = Field(
+        ..., min_length=2, max_length=50, description="사용자 아이디 (2~50자)"
+    )
+    pw: str = Field(..., description="비밀번호")
     email: str = Field(..., description="이메일 주소")
     service_agreed: bool = Field(..., description="서비스 이용약관 동의 (필수)")
     privacy_agreed: bool = Field(..., description="개인정보 수집 및 이용 동의 (필수)")
-    save_agreed: bool = Field(False, description="문서 저장 동의 (선택: 자소서/이력서 저장 여부)")
+    save_agreed: bool = Field(
+        False, description="문서 저장 동의 (선택: 자소서/이력서 저장 여부)"
+    )
 
 
 # 로그인 요청 시 프론트엔드에서 보내주는 데이터 양식
@@ -51,7 +60,8 @@ class LoginRequest(BaseModel):
 # 아이디 중복 확인 결과 응답 양식
 class CheckIdResponse(BaseModel):
     available: bool  # 사용 가능 여부 (True: 사용 가능, False: 중복)
-    message: str    # 안내 메시지
+    message: str  # 안내 메시지
+
 
 # 아이디 찾기 요청 양식
 class FindIdRequest(BaseModel):
@@ -61,20 +71,23 @@ class FindIdRequest(BaseModel):
 # 아이디 찾기 응답 양식
 class FindIdResponse(BaseModel):
     id: str = Field(..., description="조회된 사용자 아이디")
-    message: str = Field("등록된 아이디를 성공적으로 찾았습니다.", description="안내 메시지")
+    message: str = Field(
+        "등록된 아이디를 성공적으로 찾았습니다.", description="안내 메시지"
+    )
 
 
 # 비밀번호 재설정 요청 양식
 class ResetPasswordRequest(BaseModel):
     id: str = Field(..., min_length=2, max_length=50, description="사용자 아이디")
     email: str = Field(..., description="가입 시 등록한 이메일 주소")
-    new_pw: str = Field(..., min_length=4, description="새로운 비밀번호 (최소 4자 이상)")
+    new_pw: str = Field(..., description="새로운 비밀번호")
 
 
 # 비밀번호 재설정 응답 양식
 class ResetPasswordResponse(BaseModel):
-    message: str = Field("비밀번호가 성공적으로 변경되었습니다.", description="안내 메시지")
-
+    message: str = Field(
+        "비밀번호가 성공적으로 변경되었습니다.", description="안내 메시지"
+    )
 
 
 # 사용자 정보 반환용 응답 양식 (보안상 비밀번호는 제외)
@@ -87,32 +100,44 @@ class UserResponse(BaseModel):
     joindate: Optional[datetime] = None
 
     class Config:
-        from_attributes = True # SQLAlchemy 모델 객체를 Pydantic 모델로 자동 변환 허용
+        from_attributes = True  # SQLAlchemy 모델 객체를 Pydantic 모델로 자동 변환 허용
 
 
 # 로그인 성공 시 프론트엔드에 전달할 토큰 및 유저 정보 양식
 class TokenResponse(BaseModel):
-    access_token: str        # 프론트가 다음 요청 헤더에 담아야 할 JWT 토큰
-    token_type: str = "bearer" # 토큰 유형 (Bearer)
-    user: UserResponse       # 로그인한 사용자 프로필 정보
+    access_token: str  # 프론트가 다음 요청 헤더에 담아야 할 JWT 토큰
+    token_type: str = "bearer"  # 토큰 유형 (Bearer)
+    user: UserResponse  # 로그인한 사용자 프로필 정보
 
 
 # ==========================================
 # 3. 보안 유틸 함수 (암호화 & 토큰 발급/검증)
 # ==========================================
 
+
 def hash_password(password: str) -> str:
 
+    # bcrypt는 72바이트까지만 처리할 수 있어서, 넘으면 500 오류 대신 안내 문구를 보낸다
+    if len(password.encode("utf-8")) > 72:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="비밀번호가 너무 깁니다. 영문·숫자 기준 72자 이하로 입력해 주세요.",
+        )
+
     # 사용자가 입력한 일반 비밀번호를 안전하게 단방향 암호화(bcrypt 해싱)합니다.
-    salt = bcrypt.gensalt() # 비밀번호를 암호화 할 때 추가되는 임의의 데이터(보안강도를 높임)
+    salt = (
+        bcrypt.gensalt()
+    )  # 비밀번호를 암호화 할 때 추가되는 임의의 데이터(보안강도를 높임)
     return bcrypt.hashpw(password.encode("utf-8"), salt).decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    
+
     # 사용자가 입력한 비밀번호(평문)와 DB에 저장된 암호화된 비밀번호가 일치하는지 비교합니다.
     try:
-        return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
+        return bcrypt.checkpw(
+            plain_password.encode("utf-8"), hashed_password.encode("utf-8")
+        )
     except Exception:
         return False
 
@@ -146,7 +171,9 @@ def get_current_user(
 
     try:
         # 토큰 복호화 및 유효성 검사
-        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(
+            credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM]
+        )
         user_id = payload.get("sub")
         if not user_id:
             raise credentials_exception
@@ -165,13 +192,14 @@ def get_current_user(
 # 4. 실제 API 엔드포인트
 # ==========================================
 
+
 @router.get("/check-id", response_model=CheckIdResponse, summary="아이디 중복 확인")
 def check_id(
     user_id: str = Query(..., min_length=2, max_length=50, description="확인할 아이디"),
     db: Session = Depends(get_db),
 ):
 
-# 회원가입 화면에서 사용자가 입력한 아이디가 이미 존재하는지 실시간으로 검사
+    # 회원가입 화면에서 사용자가 입력한 아이디가 이미 존재하는지 실시간으로 검사
     existing_user = db.query(User).filter(User.id == user_id).first()
     if existing_user:
         return CheckIdResponse(available=False, message="이미 사용 중인 아이디입니다.")
@@ -180,7 +208,7 @@ def check_id(
 
 @router.post("/signup", status_code=status.HTTP_201_CREATED, summary="회원가입")
 def signup(req: SignupRequest, db: Session = Depends(get_db)):
-# 회원가입 정보를 받아 약관 동의 및 중복 검사를 거친 후 새 유저를 생성
+    # 회원가입 정보를 받아 약관 동의 및 중복 검사를 거친 후 새 유저를 생성
 
     # 1. 필수 약관 동의 여부 검증 (하나라도 체크 안 하면 400 에러)
     if not req.service_agreed:
@@ -214,8 +242,8 @@ def signup(req: SignupRequest, db: Session = Depends(get_db)):
     )
 
     db.add(new_user)
-    db.commit()          # DB 반영
-    db.refresh(new_user) # 생성된 joindate 등 최신 필드값 동기화
+    db.commit()  # DB 반영
+    db.refresh(new_user)  # 생성된 joindate 등 최신 필드값 동기화
 
     return {
         "message": "회원가입이 완료되었습니다.",
@@ -229,7 +257,7 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
     # 아이디와 비밀번호를 검증하고 성공 시 향후 인증에 사용할 JWT 토큰을 발급
     # 1. 아이디로 사용자 조회
     user = db.query(User).filter(User.id == req.id).first()
-    
+
     # 2. 유저가 없거나 비밀번호가 일치하지 않으면 401 에러
     if not user or not verify_password(req.pw, user.pw):
         raise HTTPException(
@@ -248,17 +276,20 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
 
 # 프론트엔드가 페이지를 새로고침하거나 마이페이지 접근 시 로그인 유지 여부를 확인합니다.
 # 헤더에 유효한 Bearer 토큰이 전달되어야만 호출 가능합니다.
-@router.get("/me", response_model=UserResponse, summary="내 정보 조회 (로그인 유지 확인)")
+@router.get(
+    "/me", response_model=UserResponse, summary="내 정보 조회 (로그인 유지 확인)"
+)
 def get_me(current_user: User = Depends(get_current_user)):
     return UserResponse.model_validate(current_user)
 
 
-# 로그아웃 안내를 반환합니다. 
+# 로그아웃 안내를 반환합니다.
 # JWT 방식에서는 프론트엔드(브라우저)에서 저장해 둔 토큰을 삭제하면 안전하게 로그아웃 처리됩니다.
 @router.post("/logout", summary="로그아웃")
 def logout(current_user: User = Depends(get_current_user)):
 
     return {"message": "로그아웃되었습니다.", "user_id": current_user.id}
+
 
 # 아이디 찾기
 # 이메일을 입력하면 DB를 조회한후 아이디가 존재하면 아이디를 반환하고 없으면 404
@@ -279,10 +310,13 @@ def find_id(req: FindIdRequest, db: Session = Depends(get_db)):
         message="등록된 아이디를 성공적으로 찾았습니다.",
     )
 
+
 # 비밀번호 재설정
-# 아이디, 이메일, 새로운 비밀번호를 입력하면 아이디와 이메일이 일치하는지 확인한 후 
+# 아이디, 이메일, 새로운 비밀번호를 입력하면 아이디와 이메일이 일치하는지 확인한 후
 # 새로운 비밀번호를 암호화하고 DB에 저장합니다. 마지막에 완료메시지 반환합니다.
-@router.post("/reset-password", response_model=ResetPasswordResponse, summary="비밀번호 재설정")
+@router.post(
+    "/reset-password", response_model=ResetPasswordResponse, summary="비밀번호 재설정"
+)
 def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)):
     """
     아이디와 이메일이 일치하는 계정을 확인한 후 새 비밀번호로 즉시 재설정합니다.

@@ -95,11 +95,11 @@ def feedback_range(sentence_count):
 
 
 # AI 답의 틀
-class FeedbackItem(BaseModel):  # tag(둘 중 하나) + 문장 번호 + 수정안 + 이유
-    tag: Literal["수정 필요", "문장 다듬기"]
+class FeedbackItem(BaseModel):  # 문장 번호 + 수정안 + 이유 + tag(둘 중 하나). 이유를 쓴 뒤 태그를 고르게 tag는 맨 뒤
     sentence_id: str
     suggestion: str
     reason: str
+    tag: Literal["수정 필요", "문장 다듬기"]
 
 
 class FeedbackSet(BaseModel):  # 첨삭 목록 담는 상자
@@ -114,9 +114,14 @@ def feedback_prompt(numbered, sentence_count):
         "각 항목은 문장 번호 하나(sentence_id)를 대상으로 하고, 그 문장을 고친 문장(suggestion)과 이유(reason)를 쓴다. "
         "서로 다른 문장을 고르고, 이미 좋은 문장은 건드리지 않는다. "
         "원문에 없는 사실, 경험, 숫자를 새로 만들어 넣지 않는다. 원문의 숫자와 고유명사는 그대로 둔다. "
+        "특히 원문에 없는 배운 점, 느낀 점, 성과를 덧붙이지 않는다. 같은 자기소개서의 다른 문장에 있는 사실은 숫자만 빼고 가져와 연결해도 된다. "
+        "자기소개서 안의 내용만으로 고칠 수 없는 문장은 고르지 않는다. "
+        "주장을 뒷받침할 내용이 자기소개서에 없으면, 새 내용을 지어내지 말고 주장을 자기소개서에 있는 경험 수준으로 낮춰 쓴다. "
         "tag 기준: "
-        "수정 필요는 글의 구성이나 내용의 문제(예: 지원 이유가 뒤에 있음, 근거가 부족함), "
-        "문장 다듬기는 표현의 문제(예: 너무 긴 문장, 어색한 표현)다. "
+        "수정 필요는 문장이 전하는 뜻을 바꿔야 하는 경우다(예: 뜻이 모호함, 주장만 있고 원문의 경험과 연결되지 않음, 직무와 관계없는 내용). "
+        "문장 다듬기는 뜻은 그대로 두고 표현만 바꾸는 경우다(예: 너무 긴 문장, 어색한 표현, 불필요한 말). "
+        "헷갈리면 고친 문장이 원문과 같은 뜻인지 본다. 같은 뜻이면 문장 다듬기, 뜻이 달라졌으면 수정 필요다. "
+
         "수정안은 자기소개서에 어울리는 '~합니다' 체로 쓴다. "
         "수정 이유는 한두 문장으로, '~해요'로 끝나는 부드러운 말투로 쓴다. "
         "suggestion과 reason에는 [2-1] 같은 문장 번호를 쓰지 않는다. "
@@ -126,7 +131,6 @@ def feedback_prompt(numbered, sentence_count):
         {"role": "system", "content": system},
         {"role": "user", "content": user},
     ]
-
 
 # 첨삭 하나 검사
 def feedback_problem(f, index):
