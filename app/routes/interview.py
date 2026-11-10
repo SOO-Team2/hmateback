@@ -3,9 +3,10 @@ import re
 import pymupdf
 import pymupdf4llm
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import PdfChunk, JobUnit, User
+from app.models import PdfChunk, JobUnit, User, Interview, Dialogue
 from app.routes.auth import get_current_user
 from app.ai.local import chunking, embed, ask_question, check_answer, ask_followup_question
 
@@ -86,6 +87,33 @@ def followup_question(data: dict, db: Session = Depends(get_db), user: User = De
         "question": result["question"],
     }
 
+# 면접 대화 저장 (마이페이지 면접 기록에서 보임)
+class DialogueIn(BaseModel):
+    question: str
+    answer: str | None = None  # 마지막 질문에 답을 안 했으면 비어 있음
+
+
+class InterviewSave(BaseModel):
+    cat_major: str
+    cat_minor: str
+    dialogues: list[DialogueIn]
+
+
+@router.post("/interview/save")
+def save_interview(body: InterviewSave, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    if not body.dialogues:
+        raise HTTPException(status_code=400, detail="저장할 대화가 없어요.")
+    try:
+        interview = Interview(cat_major=body.cat_major, cat_minor=body.cat_minor, id=user.id)
+        db.add(interview)
+        db.flush()  # interview.interview_id 번호가 생김 (아직 확정 아님)
+        for d in body.dialogues:
+            db.add(Dialogue(question=d.question, answer=d.answer, interview_id=interview.interview_id))
+        db.commit()  # 면접 1줄 + 대화 여러 줄을 한 번에 확정
+    except Exception:
+        db.rollback()  # 하나라도 실패하면 전부 취소
+        raise HTTPException(status_code=500, detail="저장하지 못했습니다.")
+    return {"interview_id": interview.interview_id}
 
 @router.post("/verify")
 def verify_answer(data: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
