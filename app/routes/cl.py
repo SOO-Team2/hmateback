@@ -20,7 +20,7 @@ class ClSections(BaseModel):
 
 # 화면(Cl.jsx)의 GUEST_LIMIT, MEMBER_LIMIT과 같이 바꿀 것 (공백 포함)
 GUEST_MAX_TOTAL_CHARS = 500  # 비회원
-MEMBER_MAX_TOTAL_CHARS = 7000  # 회원
+MEMBER_MAX_TOTAL_CHARS = 4000  # 회원
 
 def check_length(sections, is_member=False):    # 글자 수 확인 (안 넘기면 비회원)
     data = sections.model_dump() # 4칸을 사전(dict)으로 바꿔주는 함수

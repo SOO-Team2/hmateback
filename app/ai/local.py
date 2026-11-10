@@ -1,14 +1,20 @@
+import os
 import json
 import re
 import requests
 
-LLM_URL     = 'http://127.0.0.1:11434/v1/chat/completions' #localhost보다 답변이 훨씬 빠름
-LLM_MODEL   = 'qwen2.5:7b-instruct-q4_K_M'
-EMBED_URL   = 'http://127.0.0.1:11434/v1/embeddings'
-EMBED_MODEL = 'bge-m3'
+LLM_URL = os.getenv("LLM_URL", "http://127.0.0.1:11434/v1/chat/completions")
+LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:7b-instruct-q4_K_M")
+EMBED_URL = os.getenv("EMBED_URL", "http://127.0.0.1:11434/v1/embeddings")
+EMBED_MODEL = os.getenv("EMBED_MODEL", "bge-m3")
+AI_TIMEOUT = int(os.getenv("AI_TIMEOUT", "60"))
+MAX_INPUT_TEXT_LENGTH = int(os.getenv("MAX_INPUT_TEXT_LENGTH", "10000"))
 
 # 2. 청킹
 def chunking(text):
+  if text and len(text) > MAX_INPUT_TEXT_LENGTH:
+    text = text[:MAX_INPUT_TEXT_LENGTH]
+
   prompt = """제공된 텍스트를 다음 규칙에 따라 청킹해 주세요.
 
 [규칙]
@@ -49,16 +55,30 @@ def chunking(text):
       ],
       "response_format": {"type": "json_object"}, #오직 JSON만 반환
       "temperature": 0.1
-    }
+    },
+    timeout=AI_TIMEOUT
   )
+  res.raise_for_status()
   content = res.json()["choices"][0]["message"]["content"]
-  data = json.loads(content) # str -> dict
+  try:
+    data = json.loads(content)
+  except json.JSONDecodeError:
+    match = re.search(r"\{.*\}", content, re.DOTALL)
+    if match:
+      data = json.loads(match.group(0))
+    else:
+      raise
   return data["chunks"]
 
 # 3. 임베딩
 def embed(chunks):
-  texts = [c["content"] for c in chunks]
-  res = requests.post(EMBED_URL, json={"model": EMBED_MODEL, "input": texts})
+  texts = [c["content"][:2000] for c in chunks]  # 임베딩 모델 컨텍스트 초과 방지
+  res = requests.post(
+    EMBED_URL,
+    json={"model": EMBED_MODEL, "input": texts},
+    timeout=AI_TIMEOUT
+  )
+  res.raise_for_status()
   embeddings = res.json()["data"]
 
   for chunk, emb in zip(chunks, embeddings):
@@ -68,6 +88,9 @@ def embed(chunks):
 
 # LLM 호출
 def call_llm(prompt: str, content: str) -> dict:
+  if content and len(content) > MAX_INPUT_TEXT_LENGTH:
+    content = content[:MAX_INPUT_TEXT_LENGTH]
+
   res = requests.post(
     LLM_URL,
     json={
@@ -78,10 +101,18 @@ def call_llm(prompt: str, content: str) -> dict:
       ],
       "response_format": {"type": "json_object"},
       "temperature": 0.3
-    }
+    },
+    timeout=AI_TIMEOUT
   )
-  content = res.json()["choices"][0]["message"]["content"]
-  return json.loads(content)
+  res.raise_for_status()
+  raw_content = res.json()["choices"][0]["message"]["content"]
+  try:
+    return json.loads(raw_content)
+  except json.JSONDecodeError:
+    match = re.search(r"\{.*\}", raw_content, re.DOTALL)
+    if match:
+      return json.loads(match.group(0))
+    raise
 
 PROMPT_CATEGORIES = {
   "지원 동기": """
@@ -167,10 +198,10 @@ PROMPT_CATEGORIES = {
 """
 }
 
-#  꼬리 질문 생성 프롬프트
+#  심층 질문 생성 프롬프트
 FOLLOWUP_PROMPTS = {
   "지원 동기": """
-지원자의 직무, 이전 면접 질문, 지원자의 답변을 바탕으로 꼬리 질문 생성 여부를 엄격히 판단하고, 추가 검증이 필요할 때만 꼬리 질문 1개를 생성해 주세요.
+지원자의 직무, 이전 면접 질문, 지원자의 답변을 바탕으로 심층 질문 생성 여부를 엄격히 판단하고, 추가 검증이 필요할 때만 심층 질문 1개를 생성해 주세요.
 
 [제약 사항]
 1. 질문 생성 판단 기준:
@@ -192,11 +223,11 @@ FOLLOWUP_PROMPTS = {
 다른 설명 없이 반드시 아래 JSON 객체 형식으로만 출력해 주세요.
 {
   "need_followup": true 또는 false,
-  "question": "꼬리 질문 문장" 또는 null
+  "question": "심층 질문 문장" 또는 null
 }
 """,
   "경험 및 역량": """
-지원자의 직무, 이전 면접 질문, 지원자의 답변을 바탕으로 직무 관련 프로젝트 경험과 기술 역량을 '깊이 파고드는(Deep-Dive)' 꼬리 질문 1개를 생성해 주세요.
+지원자의 직무, 이전 면접 질문, 지원자의 답변을 바탕으로 직무 관련 프로젝트 경험과 기술 역량을 '깊이 파고드는(Deep-Dive)' 심층 질문 1개를 생성해 주세요.
 
 [제약 사항]
 1. 이 단계는 필수 검증 단계이므로 반드시 need_followup은 true로 설정할 것.
@@ -205,7 +236,7 @@ FOLLOWUP_PROMPTS = {
   - '귀사', '저', '제'는 지원자가 쓰는 표현이므로 질문에 쓰지 말 것.
   - 나쁜 예: 귀사의 직무가 왜 제 경험과 강점을 살릴 수 있는 자리인가요?
   - 좋은 예: 지원자님의 경험과 강점이 우리 회사의 이 직무에 어떻게 도움이 된다고 생각하시나요?
-3. [꼬리 질문 작성 규칙]:
+3. [심층 질문 작성 규칙]:
   - 반드시 지원자의 [답변]에 실제로 등장한 '구체적인 프로젝트명, 기술 스택, 시도한 해결책' 중 하나를 직접 인용할 것.
   - 답변에서 미처 다 설명하지 않은 '기술적 판단 근거', '예상치 못한 문제 상황과 대처', 혹은 '결과의 한계와 개선점'을 날카롭게 파고들 것.
   - 예시: "답변에서 언급하신 OO 방식을 적용하셨을 때, 기존 방식 대비 발생했던 성능 저하나 부작용은 없었나요? 어떻게 해결하셨나요?"
@@ -218,11 +249,11 @@ FOLLOWUP_PROMPTS = {
 다른 설명 없이 반드시 아래 JSON 객체 형식으로만 출력해 주세요.
 {
   "need_followup": true,
-  "question": "꼬리 질문 문장"
+  "question": "심층 질문 문장"
 }
 """,
   "인성 및 협업": """
-지원자의 직무, 이전 면접 질문, 지원자의 답변을 바탕으로 소통 방식과 협업 태도를 '깊이 파고드는(Deep-Dive)' 꼬리 질문 1개를 생성해 주세요.
+지원자의 직무, 이전 면접 질문, 지원자의 답변을 바탕으로 소통 방식과 협업 태도를 '깊이 파고드는(Deep-Dive)' 심층 질문 1개를 생성해 주세요.
 
 [제약 사항]
 1. 이 단계는 필수 검증 단계이므로 반드시 need_followup은 true로 설정할 것.
@@ -231,7 +262,7 @@ FOLLOWUP_PROMPTS = {
   - '귀사', '저', '제'는 지원자가 쓰는 표현이므로 질문에 쓰지 말 것.
   - 나쁜 예: 귀사의 직무가 왜 제 경험과 강점을 살릴 수 있는 자리인가요?
   - 좋은 예: 지원자님의 경험과 강점이 우리 회사의 이 직무에 어떻게 도움이 된다고 생각하시나요?
-3. [꼬리 질문 작성 규칙]:
+3. [심층 질문 작성 규칙]:
   - 반드시 지원자의 [답변]에 실제로 등장한 '구체적인 갈등 대상(예: 학술팀 vs 체험팀), 제안했던 해결책, 특정 상황'을 직접 인용할 것.
   - 답변에 나오지 않은 '당시 반대 의견을 가졌던 동료의 반응과 설득 과정', 혹은 '해결책 실행 중 겪었던 돌발 변수와 조율 과정'을 구체적으로 파고들 것.
   - 예시: "답변에서 말씀하신 융합형 전시 모델을 제안하셨을 때, 학술적 깊이를 고집하던 팀원들을 최종적으로 동의하게 만든 결정적인 설득 방식이나 대화는 무엇이었나요?"
@@ -243,11 +274,11 @@ FOLLOWUP_PROMPTS = {
 다른 설명 없이 반드시 아래 JSON 객체 형식으로만 출력해 주세요.
 {
   "need_followup": true,
-  "question": "꼬리 질문 문장"
+  "question": "심층 질문 문장"
 }
 """,
   "입사 후 포부": """
-지원자의 직무, 이전 면접 질문, 지원자의 답변을 바탕으로 꼬리 질문 생성 여부를 엄격히 판단하고, 필요할 때만 꼬리 질문 1개를 생성해 주세요.
+지원자의 직무, 이전 면접 질문, 지원자의 답변을 바탕으로 심층 질문 생성 여부를 엄격히 판단하고, 필요할 때만 심층 질문 1개를 생성해 주세요.
 
 [제약 사항]
 1. 질문 생성 판단 기준:
@@ -268,7 +299,7 @@ FOLLOWUP_PROMPTS = {
 다른 설명 없이 반드시 아래 JSON 객체 형식으로만 출력해 주세요.
 {
   "need_followup": true 또는 false,
-  "question": "꼬리 질문 문장" 또는 null
+  "question": "심층 질문 문장" 또는 null
 }
 """
 }
@@ -340,7 +371,7 @@ def ask_question(
   return result
 
 # ---------------------------------------------------------------------------
-# 꼬리 질문 생성 함수 (규칙 강제 및 결과 정제)
+# 심층 질문 생성 함수 (규칙 강제 및 결과 정제)
 # 1. 지원동기 / 입사 후 포부: 답변이 충분하면 need_followup=False, 부족할 때만 질문 생성
 # 2. 경험 및 역량 / 인성 및 협업: 무조건 need_followup=True 필수 1개 보장
 # ---------------------------------------------------------------------------
@@ -352,10 +383,10 @@ def ask_followup_question(
     evidences: list[str] | None = None,
 ) -> dict:
     """
-    지원자의 직전 질문과 답변을 분석하여 꼬리 질문을 생성하거나 건너뜁니다.
+    지원자의 직전 질문과 답변을 분석하여 심층 질문을 생성하거나 건너뜁니다.
     반환 형식: {"need_followup": bool, "question": str | None}
     """
-    # 1. 해당 카테고리에 맞는 꼬리질문 프롬프트 준비
+    # 1. 해당 카테고리에 맞는 심층질문 프롬프트 준비
     prompt = FOLLOWUP_PROMPTS.get(category, "")
     prompt += "\n질문은 반드시 한국어로만 쓰고, 중국어와 한자는 쓰지 말 것.\n"
 
@@ -395,7 +426,7 @@ def ask_followup_question(
             else:
                 followup_q = "그 조율 과정에서 지원자님의 중재안에 대해 끝까지 반대하거나 우려를 표했던 팀원은 없었나요? 그 팀원은 어떻게 설득하셨나요?"
 
-    # 6. 지원동기 / 포부에서 꼬리질문이 필요 없다고 판단한 경우 question을 null로 정리
+    # 6. 지원동기 / 포부에서 심층질문이 필요 없다고 판단한 경우 question을 null로 정리
     if not need_followup:
         return {"need_followup": False, "question": None}
 
@@ -448,7 +479,7 @@ def check_answer(answer: str, evidences: list[str]) -> list[dict]:
 {answer}
 """
   result = call_llm(VERIFY_PROMPT, user_content)
-  return [m for m in result.get("mismatches", []) if is_conflict(m)]
+  return [m for m in result.get("mismatches", []) if is_conflict(m, context, answer)]
 
 
 CONFLICT_PROMPT = """
@@ -472,11 +503,13 @@ CONFLICT_PROMPT = """
 
 
 # 2차 확인: 두 내용이 동시에 사실일 수 없을 때만 불일치로 인정
-def is_conflict(mismatch: dict) -> bool:
+# 짧은 구절만 보면 무슨 이야기인지 몰라서, 서류 원문과 답변 전체도 같이 보여 준다
+def is_conflict(mismatch: dict, context: str, answer_full: str) -> bool:
   document = str(mismatch.get("document", "")).strip()
   answer = str(mismatch.get("answer", "")).strip()
   if not document or not answer:
     return False
 
-  result = call_llm(CONFLICT_PROMPT, f"\n서류: {document}\n답변: {answer}\n")
+  content = f"\n[서류 원문]\n{context}\n\n[면접 답변]\n{answer_full}\n\n서류: {document}\n답변: {answer}\n"
+  result = call_llm(CONFLICT_PROMPT, content)
   return result.get("conflict") is True

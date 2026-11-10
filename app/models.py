@@ -80,6 +80,7 @@ class Answer(Base):
 class PdfChunk(Base):
     __tablename__ = "PDF_CHUNK"
     chunk_id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(50), ForeignKey("USER.id"), nullable=False)
     doctype = Column(String(50), nullable=False)
     filename = Column(String(255))
     index = Column(Integer, nullable=False) #청크 순서

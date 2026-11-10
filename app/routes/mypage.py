@@ -3,6 +3,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from fastapi import UploadFile, File, Response
 
 from app.database import get_db
 from app.models import (
@@ -14,6 +15,7 @@ from app.models import (
     Dialogue,
     CL,
     Answer,
+    PdfChunk,
 )
 from app.routes.auth import get_current_user
 from app.routes.cl import ClSave, check_length
@@ -142,6 +144,7 @@ def resume_to_dict(db, resume):
         "school": resume.school,
         "major": resume.major,
         "skill": resume.skill or "",
+        "has_portfolio": resume.portfolio is not None,  # 포트폴리오 등록 여부 (True/False)
         "careers": [
             {
                 "company": c.company,
@@ -195,6 +198,60 @@ def save_resume(
         logger.error("이력서 저장 실패: %s", type(e).__name__)
         raise HTTPException(status_code=500, detail="저장하지 못했습니다.")
     return resume_to_dict(db, resume)
+
+
+# 포트폴리오 PDF 업로드 (POST /mypage/resume/portfolio)
+@router.post("/resume/portfolio")
+def upload_portfolio(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="포트폴리오는 PDF 파일만 업로드할 수 있습니다.")
+
+    content = file.file.read()
+    if len(content) > 20 * 1024 * 1024:  # 20MB 제한
+        raise HTTPException(status_code=400, detail="포트폴리오 파일은 20MB 이하여야 합니다.")
+
+    resume = db.query(Resume).filter(Resume.id == user.id).first()
+    if not resume:  # 이력서가 아직 없으면 빈 이력서를 만든다
+        resume = Resume(id=user.id)
+        db.add(resume)
+
+    resume.portfolio = content  # DB의 LargeBinary 칸에 파일 내용을 그대로 저장
+    db.commit()
+    return {"message": "포트폴리오가 성공적으로 등록되었습니다."}
+
+
+# 포트폴리오 열람 (GET /mypage/resume/portfolio)
+@router.get("/resume/portfolio")
+def download_portfolio(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    resume = db.query(Resume).filter(Resume.id == user.id).first()
+    if not resume or not resume.portfolio:
+        raise HTTPException(status_code=404, detail="등록된 포트폴리오가 없습니다.")
+
+    return Response(
+        content=resume.portfolio,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "inline; filename=portfolio.pdf"},
+    )
+
+
+# 포트폴리오 삭제 (DELETE /mypage/resume/portfolio)
+@router.delete("/resume/portfolio")
+def delete_portfolio(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    resume = db.query(Resume).filter(Resume.id == user.id).first()
+    if resume and resume.portfolio:
+        resume.portfolio = None
+        db.commit()
+    return {"message": "포트폴리오가 삭제되었습니다."}
 
 
 # ---------------------------------------------------------------------------
@@ -315,6 +372,7 @@ def withdraw(db: Session = Depends(get_db), user: User = Depends(get_current_use
         db.query(Career).filter(Career.id == uid).delete()  # 경력
         db.query(Certificate).filter(Certificate.id == uid).delete()  # 자격증
         db.query(Resume).filter(Resume.id == uid).delete()  # 이력서
+        db.query(PdfChunk).filter(PdfChunk.user_id == uid).delete()  # PDF 청크 (탈퇴 시 개인정보 및 외래키 정리)
         db.delete(user)  # 회원
         db.commit()
     except Exception as e:
