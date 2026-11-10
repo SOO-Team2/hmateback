@@ -56,17 +56,16 @@ def first_question(
 @router.post("/answer")
 def submit_answer(data: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     filenames = data.get("filenames", [])
-    category = data.get("category", "")
-    evidences = search_chunks(db, user.id, filenames, category)
+    evidences = search_chunks(db, user.id, filenames, data["category"])
 
     job_units = []
-    if category == "경험 및 역량" and not evidences:
+    if data["category"] == "경험 및 역량" and not evidences:
         job_units = search_job_units(db, data["job"], data["job"])
 
     # 이미 질문한 내용과 겹치지 않도록 파라미터 추가
     previous_questions = data.get("previous_questions", [])
     result = ask_question(
-        category,
+        data["category"],
         data["job"],
         evidences,
         job_units,
