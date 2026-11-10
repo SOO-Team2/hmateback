@@ -35,7 +35,7 @@ def first_question(
     elif my_cl:
         filenames.append(save_pdf(db, "cl", "my_cl", my_cl.encode(), my_cl))
 
-    evidences = search_chunks(db, filenames, "지원 동기")
+    evidences = search_chunks(db, filenames, "지원 동기 지원 계기 선택 이유")
     result = ask_question("지원 동기", job, evidences)
     return {
         "question": result["question"],
@@ -47,13 +47,30 @@ def first_question(
 @router.post("/answer")
 def submit_answer(data: dict, db: Session = Depends(get_db)):
     filenames = data.get("filenames", [])
-    evidences = search_chunks(db, filenames, data["category"])
+    category = data.get("category", "")
+    # 검색 키워드 보강
+    search_query_map = {
+        "지원 동기": "지원 동기 지원 계기 선택 이유",
+        "경험 및 역량": "경험 및 역량 직무 프로젝트 기술 역량 수행",
+        "인성 및 협업": "인성 협업 소통 갈등 해결 팀워크",
+        "입사 후 포부": "입사 후 포부 목표 성장 계획 미래 비전 실천",
+    }
+    search_query = search_query_map.get(category, category)
+    evidences = search_chunks(db, filenames, search_query)
 
     job_units = []
-    if data["category"] == "경험 및 역량" and not evidences:
+    if category == "경험 및 역량" and not evidences:
         job_units = search_job_units(db, data["job"], data["job"])
 
-    result = ask_question(data["category"], data["job"], evidences, job_units)
+    # 이미 질문한 내용과 겹치지 않도록 파라미터 추가
+    previous_questions = data.get("previous_questions", [])
+    result = ask_question(
+        category,
+        data["job"],
+        evidences,
+        job_units,
+        previous_questions=previous_questions,
+    )
     return {
         "question": result["question"],
         "evidences": result["evidences"],
@@ -93,7 +110,6 @@ def verify_answer(data: dict, db: Session = Depends(get_db)):
         for mismatch in check_answer(data["answer"], evidences):
             mismatch["source"] = source  # 화면에 어느 서류인지 표시
             mismatches.append(mismatch)
-    return {"mismatches": mismatches}
     return {"mismatches": mismatches}
 
 # 1. 추출
