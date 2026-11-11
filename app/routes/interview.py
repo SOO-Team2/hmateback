@@ -13,6 +13,15 @@ from app.ai.local import chunking, embed, ask_question, check_answer, ask_follow
 router = APIRouter(tags=["AI 면접"])
 MAX_PDF_SIZE = 10 * 1024 * 1024  # 10MB 크기 제한
 MAX_PDF_PAGES = 10  # 최대 10페이지 제한
+MAX_DISTANCE = 0.55  # 코사인 거리 임계값 (이보다 멀면 관련 없는 청크)
+
+# 카테고리별 확장 검색 쿼리
+SEARCH_QUERIES = {
+    "지원 동기": "지원 동기 직무 선택 이유 계기 관심 가치관",
+    "경험 및 역량": "직무 관련 프로젝트 실무 경험 기술 역량 문제 해결 개발 수행 성과",
+    "인성 및 협업": "팀 프로젝트 협업 소통 갈등 조율 팀원 의견 차이 설득 동료 배려",
+    "입사 후 포부": "입사 후 포부 목표 성장 계획 기여 비전 다짐",
+}
 
 @router.post("/question", summary="첫 질문 생성 (서류 업로드)")
 def first_question(
@@ -62,14 +71,14 @@ def submit_answer(data: dict, db: Session = Depends(get_db), user: User = Depend
     if data["category"] == "경험 및 역량" and not evidences:
         job_units = search_job_units(db, data["job"], data["job"])
 
-    # 이미 질문한 내용과 겹치지 않도록 파라미터 추가
-    previous_questions = data.get("previous_questions", [])
+    # 이전 대화 내용과 겹치지 않도록 대화 내역 전달
+    previous_dialogues = data.get("previous_dialogues", [])
     result = ask_question(
         data["category"],
         data["job"],
         evidences,
         job_units,
-        previous_questions=previous_questions,
+        previous_dialogues=previous_dialogues,
     )
     return {
         "question": result["question"],
@@ -224,26 +233,40 @@ def save_pdf(
 
 
 # 원문 청크 검색 (DB 행 그대로 돌려줌)
-def search_rows(db: Session, user_id: str, filenames: list[str], query: str, top_k: int = 1) -> list[PdfChunk]:
+def search_rows(
+    db: Session,
+    user_id: str,
+    filenames: list[str],
+    query: str,
+    top_k: int = 1,
+    max_distance: float | None = None,
+) -> list[PdfChunk]:
     if not filenames or not user_id:
         return []
 
-    query_vec = embed([{"content": query}])[0]["embedding"]
-    return (
-        db.query(PdfChunk)
-        .filter(
-            PdfChunk.user_id == user_id,
-            PdfChunk.filename.in_(filenames)
-        )
-        .order_by(PdfChunk.embedding.cosine_distance(query_vec))
-        .limit(top_k)
-        .all()
+    search_query = SEARCH_QUERIES.get(query, query)
+    query_vec = embed([{"content": search_query}])[0]["embedding"]
+    distance_expr = PdfChunk.embedding.cosine_distance(query_vec)
+
+    q = db.query(PdfChunk).filter(
+        PdfChunk.user_id == user_id,
+        PdfChunk.filename.in_(filenames),
     )
+    if max_distance is not None:
+        q = q.filter(distance_expr <= max_distance)
+
+    return q.order_by(distance_expr).limit(top_k).all()
 
 
 # 원문 청크 검색 (화면에 보여 줄 글만 돌려줌)
-def search_chunks(db: Session, user_id: str, filenames: list[str], query: str, top_k: int = 1) -> list[str]:
-    rows = search_rows(db, user_id, filenames, query, top_k)
+def search_chunks(
+    db: Session,
+    user_id: str,
+    filenames: list[str],
+    query: str,
+    top_k: int = 1,
+) -> list[str]:
+    rows = search_rows(db, user_id, filenames, query, top_k, max_distance=MAX_DISTANCE)
     cleaned = [clean_evidence(row.content) for row in rows]
     return [text for text in cleaned if text]
 
