@@ -81,7 +81,7 @@ def submit_answer(data: dict, db: Session = Depends(get_db), user: User = Depend
 @router.post("/followup")
 def followup_question(data: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     filenames = data.get("filenames", [])
-    evidences = search_chunks(db, user.id, filenames, data["category"])
+    evidences = search_chunks(db, user.id, filenames, data["category"], top_k=3)
 
     result = ask_followup_question(
         category=data["category"],
@@ -89,10 +89,12 @@ def followup_question(data: dict, db: Session = Depends(get_db), user: User = De
         question=data["question"],
         answer=data["answer"],
         evidences=evidences,
+        used_evidences=data.get("used_evidences", []),
     )
     return {
         "is_followup": result["need_followup"],
         "question": result["question"],
+        "evidences": result.get("evidences", []),
     }
 
 # 면접 대화 저장 (마이페이지 면접 기록에서 보임)
@@ -190,7 +192,7 @@ def extract_text(pdf_bytes) -> str:
 def clean_evidence(text: str) -> str:
     text = re.sub(r"^\s*#+.*$", "", text, flags=re.M)  # # 제목 줄
     text = re.sub(r"^\s*\[[^\]\n]+\]\s*", "", text, flags=re.M)  # [지원 동기] 같은 제목
-    text = text.replace("**", "")
+    text = text.replace("**", "").replace("。", ".")
     return re.sub(r"\s+", " ", text).strip()
 
 

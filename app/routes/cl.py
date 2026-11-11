@@ -27,7 +27,7 @@ def check_length(sections, is_member=False):    # 글자 수 확인 (안 넘기�
     limit = MEMBER_MAX_TOTAL_CHARS if is_member else GUEST_MAX_TOTAL_CHARS
     # 화면(Cl.jsx)과 똑같이 공백 포함으로 센다
     if sum(len(v) for v in data.values()) > limit:
-        raise HTTPException(status_code=400, detail="자기소개서가 너무 깁니다.")
+        raise HTTPException(status_code=400, detail="글자 수 한도를 초과했습니다.")
     return data
 
 # 토큰이 있으면 로그인한 사용자 id, 없거나 만료됐으면 None(비회원)
