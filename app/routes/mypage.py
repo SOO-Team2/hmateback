@@ -20,7 +20,7 @@ from app.models import (
 from app.routes.auth import get_current_user
 from app.routes.cl import ClSave, check_length
 
-router = APIRouter(prefix="/mypage")  # 이 파일 주소는 모두 /mypage로 시작
+router = APIRouter(prefix="/mypage", tags=["마이페이지"])  # 이 파일 주소는 모두 /mypage로 시작
 logger = logging.getLogger("uvicorn.error")  # 오류를 서버 터미널에 적는 도구
 
 # ---------------------------------------------------------------------------
@@ -51,7 +51,7 @@ def cl_to_dict(db, cl):
     }
 
 
-@router.get("/cl")
+@router.get("/cl", summary="내 자소서 목록")
 def list_cls(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
 
     cls = (
@@ -60,7 +60,7 @@ def list_cls(db: Session = Depends(get_db), user: User = Depends(get_current_use
     return [cl_to_dict(db, cl) for cl in cls]
 
 
-@router.put("/cl/{cl_id}")
+@router.put("/cl/{cl_id}", summary="자소서 수정")
 def update_cl(
     cl_id: int,
     body: ClSave,
@@ -89,7 +89,7 @@ def update_cl(
     return cl_to_dict(db, cl)
 
 
-@router.delete("/cl/{cl_id}")
+@router.delete("/cl/{cl_id}", summary="자소서 삭제")
 def delete_cl(
     cl_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -158,7 +158,7 @@ def resume_to_dict(db, resume):
     }
 
 
-@router.get("/resume")
+@router.get("/resume", summary="이력서 조회")
 def get_resume(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     resume = db.query(Resume).filter(Resume.id == user.id).first()
     if not resume:
@@ -168,7 +168,7 @@ def get_resume(db: Session = Depends(get_db), user: User = Depends(get_current_u
 
 # 이력서는 한 사람당 하나: 있으면 덮어쓰고, 없으면 새로 만든다
 # 경력·자격증은 개수가 바뀔 수 있어서 전부 지우고 받은 대로 다시 넣는다
-@router.put("/resume")
+@router.put("/resume", summary="이력서 저장")
 def save_resume(
     body: ResumeIn,
     db: Session = Depends(get_db),
@@ -201,7 +201,7 @@ def save_resume(
 
 
 # 포트폴리오 PDF 업로드 (POST /mypage/resume/portfolio)
-@router.post("/resume/portfolio")
+@router.post("/resume/portfolio", summary="포트폴리오 업로드")
 def upload_portfolio(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
@@ -225,7 +225,7 @@ def upload_portfolio(
 
 
 # 포트폴리오 열람 (GET /mypage/resume/portfolio)
-@router.get("/resume/portfolio")
+@router.get("/resume/portfolio", summary="포트폴리오 열람")
 def download_portfolio(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -242,7 +242,7 @@ def download_portfolio(
 
 
 # 포트폴리오 삭제 (DELETE /mypage/resume/portfolio)
-@router.delete("/resume/portfolio")
+@router.delete("/resume/portfolio", summary="포트폴리오 삭제")
 def delete_portfolio(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -270,7 +270,7 @@ def find_interview(db, user_id, interview_id):
     return interview
 
 
-@router.get("/interview")
+@router.get("/interview", summary="면접 기록 목록")
 def list_interviews(
     db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -292,7 +292,7 @@ def list_interviews(
     ]
 
 
-@router.get("/interview/{interview_id}")
+@router.get("/interview/{interview_id}", summary="면접 기록 상세")
 def get_interview(
     interview_id: int,
     db: Session = Depends(get_db),
@@ -316,7 +316,7 @@ def get_interview(
     }
 
 
-@router.delete("/interview/{interview_id}")
+@router.delete("/interview/{interview_id}", summary="면접 기록 삭제")
 def delete_interview(
     interview_id: int,
     db: Session = Depends(get_db),
@@ -340,7 +340,7 @@ class AgreementIn(BaseModel):
     save_agreed: bool
 
 
-@router.patch("/agreement")
+@router.patch("/agreement", summary="문서 저장 동의 변경")
 def update_agreement(
     body: AgreementIn,
     db: Session = Depends(get_db),
@@ -352,7 +352,7 @@ def update_agreement(
 
 
 # 회원 탈퇴: 내 데이터를 자식 표부터 전부 지우고 마지막에 회원을 지운다
-@router.delete("/me")
+@router.delete("/me", summary="회원 탈퇴")
 def withdraw(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     uid = user.id
     try:

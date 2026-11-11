@@ -10,11 +10,11 @@ from app.models import PdfChunk, JobUnit, User, Interview, Dialogue
 from app.routes.auth import get_current_user
 from app.ai.local import chunking, embed, ask_question, check_answer, ask_followup_question
 
-router = APIRouter()
+router = APIRouter(tags=["AI 면접"])
 MAX_PDF_SIZE = 10 * 1024 * 1024  # 10MB 크기 제한
 MAX_PDF_PAGES = 10  # 최대 10페이지 제한
 
-@router.post("/question")
+@router.post("/question", summary="첫 질문 생성 (서류 업로드)")
 def first_question(
     job: str = Form(...),
     resume_pdf: UploadFile = File(None),
@@ -53,7 +53,7 @@ def first_question(
     }  # 프론트에 전달
 
 
-@router.post("/answer")
+@router.post("/answer", summary="다음 카테고리 질문 생성")
 def submit_answer(data: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     filenames = data.get("filenames", [])
     evidences = search_chunks(db, user.id, filenames, data["category"])
@@ -78,7 +78,7 @@ def submit_answer(data: dict, db: Session = Depends(get_db), user: User = Depend
 
 
 # 심층 질문 생성 여부 판단 및 질문 반환
-@router.post("/followup")
+@router.post("/followup", summary="심층질문 생성 여부 판단")
 def followup_question(data: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     filenames = data.get("filenames", [])
     evidences = search_chunks(db, user.id, filenames, data["category"], top_k=3)
@@ -109,7 +109,7 @@ class InterviewSave(BaseModel):
     dialogues: list[DialogueIn]
 
 
-@router.post("/interview/save")
+@router.post("/interview/save", summary="면접 대화 저장")
 def save_interview(body: InterviewSave, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     if not body.dialogues:
         raise HTTPException(status_code=400, detail="저장할 대화가 없어요.")
@@ -125,7 +125,7 @@ def save_interview(body: InterviewSave, db: Session = Depends(get_db), user: Use
         raise HTTPException(status_code=500, detail="저장하지 못했습니다.")
     return {"interview_id": interview.interview_id}
 
-@router.post("/verify")
+@router.post("/verify", summary="답변-서류 불일치 검사")
 def verify_answer(data: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     filenames = data.get("filenames", [])
 

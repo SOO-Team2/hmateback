@@ -28,7 +28,7 @@ async def lifespan(app: FastAPI):
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(title="합격메이트 API", lifespan=lifespan)
 
 # 프론트엔드 연결
 app.add_middleware( #요청 검사

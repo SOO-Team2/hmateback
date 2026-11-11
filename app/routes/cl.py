@@ -8,7 +8,7 @@ from app.database import get_db
 from app.models import CL, Answer
 from app.routes.auth import get_current_user, security_scheme
 
-router = APIRouter()                            # 이 파일 주소들을 담을 상자
+router = APIRouter(tags=["자기소개서"])                            # 이 파일 주소들을 담을 상자
 logger = logging.getLogger("uvicorn.error")     # 오류를 서버 터미널에 적는 도구
 
 # 화면이 보내는 4칸의 모양
@@ -47,7 +47,7 @@ def current_user_id(
 # 자소서 첨삭
 # ---------------------------------------------------------------------------
 
-@router.post("/cl/feedback")
+@router.post("/cl/feedback", summary="자소서 첨삭")
 def cl_feedback(sections: ClSections, user_id=Depends(current_user_id)):
     data = check_length(sections, is_member=user_id is not None)                       # ① 글자 수 확인
     try:
@@ -64,7 +64,7 @@ def cl_feedback(sections: ClSections, user_id=Depends(current_user_id)):
 # 맞춤법 검사
 # ---------------------------------------------------------------------------
 
-@router.post("/cl/spellcheck")
+@router.post("/cl/spellcheck", summary="맞춤법 검사")
 def cl_spellcheck(sections: ClSections, user_id=Depends(current_user_id)):
     data = check_length(sections, is_member=user_id is not None)
     try:
@@ -80,7 +80,7 @@ def cl_spellcheck(sections: ClSections, user_id=Depends(current_user_id)):
 # 제목 추천
 # ---------------------------------------------------------------------------
 
-@router.post("/cl/title")
+@router.post("/cl/title", summary="제목 추천")
 def cl_title(sections: ClSections, user_id=Depends(current_user_id)):
     data = check_length(sections, is_member=user_id is not None)
     try:
@@ -125,7 +125,7 @@ def save_cl(db, user_id, title, sections):
         raise
 
 
-@router.post("/cl/save")
+@router.post("/cl/save", summary="자소서 저장")
 def cl_save(
     body: ClSave,
     db: Session = Depends(get_db),

@@ -16,7 +16,7 @@ from app.models import User  # USER 테이블 ORM 모델
 # 1. 라우터 및 JWT 보안 기본 설정
 # ==========================================
 # /auth 경로로 들어오는 모든 요청을 담당하는 라우터 생성
-router = APIRouter(prefix="/auth", tags=["auth"])
+router = APIRouter(prefix="/auth", tags=["회원"])
 
 # JWT 서명에 사용할 비밀키 (환경변수에 없으면 기본값 사용)
 SECRET_KEY = os.getenv("JWT_SECRET_KEY")
