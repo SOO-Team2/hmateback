@@ -4,7 +4,10 @@ import re
 import requests
 from app.ai.local_prompts import (
   CHUNKING_PROMPT,
+  CATEGORY_SEPARATION,
+  QUESTION_COMMON,
   QUESTION_PROMPTS,
+  FOLLOWUP_COMMON,
   FOLLOWUP_PROMPTS,
   JOB_UNIT_RULE,
   VERIFY_PROMPT,
@@ -18,37 +21,55 @@ EMBED_MODEL = os.getenv("EMBED_MODEL", "bge-m3")
 AI_TIMEOUT = int(os.getenv("AI_TIMEOUT", "60"))
 MAX_INPUT_TEXT_LENGTH = int(os.getenv("MAX_INPUT_TEXT_LENGTH", "10000"))
 
-# 2. 청킹
-def chunking(text):
-  if text and len(text) > MAX_INPUT_TEXT_LENGTH:
-    text = text[:MAX_INPUT_TEXT_LENGTH]
+# 참고 문장 필터링 (인적사항, 메타데이터 제외하고 서술형 줄글만)
+def is_narrative_sentence(text: str) -> bool:
+  s = text.strip()
+  # 1. 너무 짧은 단어나 단순 소제목
+  if len(s) < 15:
+    return False
+  # 2. 이메일, 전화번호, URL
+  if re.search(r"@|\b(010|02|031)[-\s]?\d{3,4}[-\s]?\d{4}\b|https?://|www\.", s):
+    return False
+  # 3. 연락처, 이메일, 생년월일, 포트폴리오 등 인적사항
+  if re.search(r"연락처|이메일|휴대전화|전화번호|생년월일|인적사항|github|portfolio", s, re.I):
+    return False
+  # 4. |로 구분된 헤더/메타데이터
+  if "|" in s:
+    return False
+  return True
+
+# LLM 호출
+def call_llm(prompt: str, content: str, temperature: float = 0.1) -> dict:
+  if content and len(content) > MAX_INPUT_TEXT_LENGTH:
+    content = content[:MAX_INPUT_TEXT_LENGTH]
 
   res = requests.post(
     LLM_URL,
     json={
       "model": LLM_MODEL,
       "messages": [
-        {"role": "system", "content": CHUNKING_PROMPT},
-        {"role": "user", "content": text},
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": content},
       ],
       "response_format": {"type": "json_object"}, #오직 JSON만 반환
-      "temperature": 0.1
+      "temperature": temperature
     },
     timeout=AI_TIMEOUT
   )
   res.raise_for_status()
-  content = res.json()["choices"][0]["message"]["content"]
+  raw_content = res.json()["choices"][0]["message"]["content"].replace("。", ".")
   try:
-    data = json.loads(content)
+    return json.loads(raw_content)
   except json.JSONDecodeError:
-    match = re.search(r"\{.*\}", content, re.DOTALL)
+    match = re.search(r"\{.*\}", raw_content, re.DOTALL)
     if match:
-      data = json.loads(match.group(0))
-    else:
-      raise
-  for c in data["chunks"]:
-    c["content"] = c["content"].replace("。", ".")
-  return data["chunks"]
+      return json.loads(match.group(0))
+    raise
+
+# 2. 청킹
+def chunking(text):
+  data = call_llm(CHUNKING_PROMPT, text)
+  return data.get("chunks", [])
 
 # 3. 임베딩
 def embed(chunks):
@@ -66,43 +87,16 @@ def embed(chunks):
 
   return chunks
 
-# LLM 호출
-def call_llm(prompt: str, content: str) -> dict:
-  if content and len(content) > MAX_INPUT_TEXT_LENGTH:
-    content = content[:MAX_INPUT_TEXT_LENGTH]
-
-  res = requests.post(
-    LLM_URL,
-    json={
-      "model": LLM_MODEL,
-      "messages": [
-        {"role": "system", "content": prompt},
-        {"role": "user", "content": content},
-      ],
-      "response_format": {"type": "json_object"},
-      "temperature": 0.3
-    },
-    timeout=AI_TIMEOUT
-  )
-  res.raise_for_status()
-  raw_content = res.json()["choices"][0]["message"]["content"].replace("。", ".")
-  try:
-    return json.loads(raw_content)
-  except json.JSONDecodeError:
-    match = re.search(r"\{.*\}", raw_content, re.DOTALL)
-    if match:
-      return json.loads(match.group(0))
-    raise
-
 # 5. 질문
 def ask_question(
   category: str,
   job: str,
   evidences: list[str],
   job_units: list[str] | None = None,
-  previous_questions: list[str] | None = None,
+  previous_dialogues: list[dict] | None = None,
 ) -> dict:
-  prompt = QUESTION_PROMPTS[category] + "\n질문은 반드시 한국어로만 쓰고, 중국어와 한자는 쓰지 말 것.\n"
+  roadmap = CATEGORY_SEPARATION.replace("{category}", category)
+  prompt = f"{roadmap}\n\n{QUESTION_PROMPTS[category]}\n\n{QUESTION_COMMON}\n질문은 반드시 한국어로만 쓰고, 중국어와 한자는 쓰지 말 것.\n"
   context = "\n\n".join(evidences) if evidences else "없음"
 
   user_content = f"""
@@ -112,12 +106,21 @@ def ask_question(
 [참고 원문]
 {context}
 """
-  if previous_questions:
-    prev_q_text = "\n".join(f"- {q}" for q in previous_questions if q)
-    user_content += f"""
-[이전 질문 내역]
-{prev_q_text}
-※ 주의: 위 [이전 질문 내역]에 이미 출제된 질문들과 질문 의도나 내용이 겹치지 않도록, 완전히 다른 관점의 새로운 질문을 생성하세요.
+  if previous_dialogues:
+    dialogue_texts = []
+    for d in previous_dialogues:
+      q = str(d.get("question", "")).strip()
+      a = str(d.get("answer", "")).strip()
+      if q and a:
+        dialogue_texts.append(f"Q: {q}\nA: {a}")
+      elif q:
+        dialogue_texts.append(f"Q: {q}")
+    if dialogue_texts:
+      dialogue_block = "\n\n".join(dialogue_texts)
+      user_content += f"""
+[이전 면접 대화]
+{dialogue_block}
+※ 주의: 위 [이전 면접 대화]에 이미 나온 질문 의도나 지원자가 이미 답변에서 밝힌 내용은 다시 묻지 말고, 완전히 다른 새로운 관점의 질문을 생성하세요.
 """
 
   if job_units:
@@ -130,13 +133,19 @@ def ask_question(
   result["question"] = re.sub(r"귀\s*사", "우리 회사", result["question"])
   result["question"] = result["question"].replace("생각하신가요", "생각하시나요")
 
+  # 참고 원문에 관련 내용이 없다고 판단하면 근거를 비움
+  if not evidences or result.get("used_evidence") is False:
+    result["evidences"] = []
+    return result
+
   # 질문과 가까운 원문 1문장 고르기
-  sentences = [
+  raw_sentences = [
     s.strip()
     for ev in evidences
     for s in re.split(r"(?<=[^0-9][.?!])\s+", ev)
     if s.strip()
   ]
+  sentences = [s for s in raw_sentences if is_narrative_sentence(s)] or raw_sentences
   if len(sentences) > 1:
     items = embed([{"content": result["question"]}] + [{"content": s} for s in sentences])
     q_vec = items[0]["embedding"]
@@ -167,20 +176,22 @@ def ask_followup_question(
     반환 형식: {"need_followup": bool, "question": str | None, "evidences": list[str]}
     """
     # 1. 해당 카테고리에 맞는 심층질문 프롬프트 준비
-    prompt = FOLLOWUP_PROMPTS.get(category, "")
-    prompt += "\n질문은 반드시 한국어로만 쓰고, 중국어와 한자는 쓰지 말 것.\n"
+    prompt = f"{FOLLOWUP_PROMPTS.get(category, '')}\n\n{FOLLOWUP_COMMON}\n질문은 반드시 한국어로만 쓰고, 중국어와 한자는 쓰지 말 것.\n"
 
     # 이미 사용한 참고 문장 제외
-    sentences = [
+    raw_sentences = [
         s.strip()
         for ev in (evidences or [])
         for s in re.split(r"(?<=[^0-9][.?!])\s+", ev)
         if s.strip()
     ]
+    sentences = [s for s in raw_sentences if is_narrative_sentence(s)] or raw_sentences
     used_set = {s.strip() for s in (used_evidences or []) if s.strip()}
     other_sentences = [s for s in sentences if s not in used_set]
 
     # 2. LLM에 전달할 사용자 컨텍스트 구성
+    used_text = "\n".join(used_evidences) if used_evidences else "없음"
+    other_text = "\n".join(other_sentences) if other_sentences else "없음"
     user_content = f"""
 [지원 직무]
 {job}
@@ -190,21 +201,12 @@ def ask_followup_question(
 
 [지원자의 답변]
 {answer}
-"""
-    if category in ["경험 및 역량", "인성 및 협업"]:
-        used_text = "\n".join(used_evidences) if used_evidences else "없음"
-        other_text = "\n".join(other_sentences) if other_sentences else "없음"
-        user_content += f"""
+
 [이전 질문의 참고 문장]
 {used_text}
 
 [서류의 다른 원문]
 {other_text}
-"""
-    elif evidences:
-        user_content += f"""
-[참고 원문]
-{"\n\n".join(evidences)}
 """
 
     # 3. 로컬 LLM 호출
@@ -235,13 +237,9 @@ def ask_followup_question(
         followup_q = re.sub(r"귀\s*사", "우리 회사", str(followup_q))
         followup_q = followup_q.replace("생각하신가요", "생각하시나요").strip()
 
-    # 8. 다른 경험을 질문한 경우, 새 참고 문장 선택
+    # 8. 이전 질문의 참고 문장 제외, 심층 질문과 가장 관련 높은 새로운 참고 문장
     followup_evidences = []
-    if (
-        category in ["경험 및 역량", "인성 및 협업"]
-        and other_sentences
-        and followup_q
-    ):
+    if other_sentences and followup_q:
         if len(other_sentences) > 1:
             items = embed([{"content": followup_q}] + [{"content": s} for s in other_sentences])
             q_vec = items[0]["embedding"]
