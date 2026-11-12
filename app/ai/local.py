@@ -87,6 +87,13 @@ def embed(chunks):
 
   return chunks
 
+# AI가 질문을 주지 못했을 때 쓰는 단계별 기본 질문
+DEFAULT_QUESTIONS = {
+  "지원 동기": "저희 회사와 이 직무에 지원하게 된 계기를 말씀해 주시겠어요?",
+  "경험 및 역량": "지원 직무와 관련해 가장 자신 있는 경험 하나를 소개해 주시겠어요?",
+  "인성 및 협업": "팀으로 일하면서 의견이 달랐던 경험이 있다면, 어떻게 해결하셨나요?",
+  "입사 후 포부": "입사 후 이 직무에서 이루고 싶은 목표는 무엇인가요?",
+}
 # 5. 질문
 def ask_question(
   category: str,
@@ -128,10 +135,16 @@ def ask_question(
     user_content += "\n[직무 역량]\n" + "\n".join(job_units) + "\n"
 
   result = call_llm(prompt, user_content)
-  if re.search(r"[\u4e00-\u9fff]", result["question"]):
+  question = str(result.get("question") or "")
+  # 질문이 비었거나 한자가 섞이면 1번 다시 요청
+  if not question or re.search(r"[\u4e00-\u9fff]", question):
     result = call_llm(prompt, user_content)
-  result["question"] = re.sub(r"귀\s*사", "우리 회사", result["question"])
-  result["question"] = result["question"].replace("생각하신가요", "생각하시나요")
+    question = str(result.get("question") or "")
+  if not question:
+    question = DEFAULT_QUESTIONS.get(category, "이 부분에 대해 조금 더 자세히 말씀해 주시겠어요?")
+  question = re.sub(r"귀\s*사", "우리 회사", question)
+  result["question"] = question.replace("생각하신가요", "생각하시나요")
+
 
   # 참고 원문에 관련 내용이 없다고 판단하면 근거를 비움
   if not evidences or result.get("used_evidence") is False:

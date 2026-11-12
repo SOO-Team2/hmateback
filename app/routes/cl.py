@@ -23,7 +23,7 @@ GUEST_MAX_TOTAL_CHARS = 500  # 비회원
 MEMBER_MAX_TOTAL_CHARS = 4000  # 회원
 
 def check_length(sections, is_member=False):    # 글자 수 확인 (안 넘기면 비회원)
-    data = sections.model_dump() # 4칸을 사전(dict)으로 바꿔주는 함수
+    data = sections.model_dump(include=set(ClSections.model_fields))  # 4칸만 사전(dict)으로 (제목은 빼고)
     limit = MEMBER_MAX_TOTAL_CHARS if is_member else GUEST_MAX_TOTAL_CHARS
     # 화면(Cl.jsx)과 똑같이 공백 포함으로 센다
     if sum(len(v) for v in data.values()) > limit:

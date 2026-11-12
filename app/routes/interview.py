@@ -54,8 +54,12 @@ def process_docs(
     cl_pdf: UploadFile | None = None,
     my_cl: str | None = None,
 ) -> list[str]:
-    # 비회원은 서류를 DB에 저장하지 않음
+    
+        # 비회원과 문서 저장에 동의하지 않은 회원은 서류를 DB에 저장하지 않음
     if not user_id:
+        return []
+    user = db.get(User, user_id)
+    if not user or not user.save_agreed:
         return []
 
     filenames = []
@@ -202,6 +206,8 @@ class InterviewSave(BaseModel):
 
 @router.post("/interview/save", summary="면접 대화 저장")
 def save_interview(body: InterviewSave, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    if not user.save_agreed:
+        raise HTTPException(status_code=403, detail="문서 저장 동의 후 저장할 수 있어요. 마이페이지에서 동의를 바꿔 주세요.")
     if not body.dialogues:
         raise HTTPException(status_code=400, detail="저장할 대화가 없어요.")
     try:
@@ -288,6 +294,7 @@ def extract_text(pdf_bytes) -> str:
                     tail = current.split()[-1]
                     head = following.split()[0]
                     text = re.sub(re.escape(tail) + r"\s+" + re.escape(head), lambda _: tail + head, text)
+
     finally:
         doc.close()
 
@@ -305,7 +312,6 @@ def clean_evidence(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-
 # 4. 저장
 def save_pdf(
     db,  user_id: str, doctype: str, filename: str, pdf_bytes: bytes, text: str
@@ -317,6 +323,7 @@ def save_pdf(
         return hash_name
 
     chunks = embed(chunking(text))
+
     for chunk in chunks:
         row = PdfChunk(
             user_id=user_id,
@@ -371,7 +378,7 @@ def search_chunks(
     query: str,
     top_k: int = 1,
 ) -> list[str]:
-    rows = search_rows(db, user_id, filenames, query, top_k, max_distance=MAX_DISTANCE)
+    rows = search_rows(db, user_id, filenames, query=query, top_k=top_k, max_distance=MAX_DISTANCE)
     cleaned = [clean_evidence(row.content) for row in rows]
     return [text for text in cleaned if text]
 
