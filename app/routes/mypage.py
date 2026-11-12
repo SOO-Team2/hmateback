@@ -67,7 +67,8 @@ def update_cl(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-
+    if not user.save_agreed:
+        raise HTTPException(status_code=403, detail="문서 저장 동의 후 저장할 수 있어요. 마이페이지에서 동의를 바꿔 주세요.")
     cl = find_cl(db, user.id, cl_id)
 
     # 저장(cl.py)과 같은 규칙: 제목 1~200자, 회원 글자 수 한도
@@ -174,6 +175,8 @@ def save_resume(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    if not user.save_agreed:
+        raise HTTPException(status_code=403, detail="문서 저장 동의 후 저장할 수 있어요. 마이페이지에서 동의를 바꿔 주세요.")
     try:
         resume = db.query(Resume).filter(Resume.id == user.id).first()
         if not resume:
@@ -207,6 +210,8 @@ def upload_portfolio(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    if not user.save_agreed:
+        raise HTTPException(status_code=403, detail="문서 저장 동의 후 저장할 수 있어요. 마이페이지에서 동의를 바꿔 주세요.")
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="포트폴리오는 PDF 파일만 업로드할 수 있습니다.")
 
