@@ -1,4 +1,5 @@
 import hashlib
+import json
 import re
 import pymupdf
 import pymupdf4llm
@@ -23,16 +24,15 @@ SEARCH_QUERIES = {
     "입사 후 포부": "입사 후 포부 목표 성장 계획 기여 비전 다짐",
 }
 
-@router.post("/question", summary="첫 질문 생성 (서류 업로드)")
-def first_question(
-    job: str = Form(...),
-    resume_pdf: UploadFile = File(None),
-    my_resume: str = Form(None),
-    cl_pdf: UploadFile = File(None),
-    my_cl: str = Form(None),
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
+# 서류 텍스트 추출, 청킹, 임베딩 및 DB 저장 함수
+def process_docs(
+    db: Session,
+    user_id: str,
+    resume_pdf: UploadFile | None = None,
+    my_resume: str | None = None,
+    cl_pdf: UploadFile | None = None,
+    my_cl: str | None = None,
+) -> list[str]:
     filenames = []
 
     if resume_pdf:
@@ -40,26 +40,73 @@ def first_question(
         if len(resume_bytes) > MAX_PDF_SIZE:
             raise HTTPException(status_code=400, detail="이력서 PDF 파일 크기는 10MB 이하여야 합니다.")
         resume_text = extract_text(resume_bytes)
-        filenames.append(save_pdf(db, user.id, "resume", resume_pdf.filename, resume_bytes, resume_text))
+        filenames.append(save_pdf(db, user_id, "resume", resume_pdf.filename, resume_bytes, resume_text))
     elif my_resume:
-        filenames.append(save_pdf(db, user.id, "resume", "my_resume", my_resume.encode(), my_resume))
+        filenames.append(save_pdf(db, user_id, "resume", "my_resume", my_resume.encode(), my_resume))
 
     if cl_pdf:
         cl_bytes = cl_pdf.file.read()
         if len(cl_bytes) > MAX_PDF_SIZE:
             raise HTTPException(status_code=400, detail="자기소개서 PDF 파일 크기는 10MB 이하여야 합니다.")
         cl_text = extract_text(cl_bytes)
-        filenames.append(save_pdf(db, user.id, "cl", cl_pdf.filename, cl_bytes, cl_text))
+        filenames.append(save_pdf(db, user_id, "cl", cl_pdf.filename, cl_bytes, cl_text))
     elif my_cl:
-        filenames.append(save_pdf(db, user.id, "cl", "my_cl", my_cl.encode(), my_cl))
+        filenames.append(save_pdf(db, user_id, "cl", "my_cl", my_cl.encode(), my_cl))
 
-    evidences = search_chunks(db, user.id, filenames, "지원 동기")
+    return filenames
+
+
+@router.post("/upload", summary="서류 업로드 및 청킹/임베딩 저장")
+def upload_docs(
+    resume_pdf: UploadFile = File(None),
+    my_resume: str = Form(None),
+    cl_pdf: UploadFile = File(None),
+    my_cl: str = Form(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    filenames = process_docs(
+        db, user.id, resume_pdf=resume_pdf, my_resume=my_resume, cl_pdf=cl_pdf, my_cl=my_cl
+    )
+    return {"filenames": filenames}
+
+
+@router.post("/question", summary="첫 질문 생성 (사전 업로드 파일명)")
+def first_question(
+    job: str = Form(...),
+    resume_pdf: UploadFile = File(None),
+    my_resume: str = Form(None),
+    cl_pdf: UploadFile = File(None),
+    my_cl: str = Form(None),
+    filenames: list[str] = Form(None),
+    filenames_json: str = Form(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    target_filenames = []
+    if filenames:
+        target_filenames.extend(filenames)
+    elif filenames_json:
+        try:
+            parsed = json.loads(filenames_json)
+            if isinstance(parsed, list):
+                target_filenames.extend([str(item) for item in parsed if item])
+        except Exception:
+            pass
+
+    # 전달된 filenames가 없으면 직접 파일 처리
+    if not target_filenames:
+        target_filenames = process_docs(
+            db, user.id, resume_pdf=resume_pdf, my_resume=my_resume, cl_pdf=cl_pdf, my_cl=my_cl
+        )
+
+    evidences = search_chunks(db, user.id, target_filenames, "지원 동기")
     result = ask_question("지원 동기", job, evidences)
     return {
         "question": result["question"],
         "evidences": result["evidences"],
-        "filenames": filenames,
-    }  # 프론트에 전달
+        "filenames": target_filenames,
+    }
 
 
 @router.post("/answer", summary="다음 카테고리 질문 생성")
