@@ -209,7 +209,7 @@ def verify_answer(data: VerifyIn, db: Session = Depends(get_db), user: User = De
 
     # 답변을 문장으로 나누고, 문장마다 가장 가까운 서류 조각 1개를 찾는다
     # 같은 조각을 가리키는 문장끼리 묶어서, 관련 있는 조각하고만 비교한다
-    # 거리가 너무 먼 문장은 서류에 없는 새로운 내용(부가 설명)으로 간주하여 검증에서 제외한다
+    # 거리(유사도)가 너무 먼 문장은 서류에 없는 새로운 내용으로 간주하여 검증에서 제외한다
     sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", data.answer) if s.strip()]
     groups = {}  # 조각 번호 -> (조각, 그 조각과 비교할 문장들)
     for sentence in sentences:
