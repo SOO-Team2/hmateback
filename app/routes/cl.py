@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.ai.cloud import generate_feedback, generate_spelling, generate_titles
 from app.database import get_db
-from app.models import CL, Answer
+from app.models import CL, Answer, User
 from app.routes.auth import get_current_user, security_scheme
 
 router = APIRouter(tags=["자기소개서"])                            # 이 파일 주소들을 담을 상자
@@ -134,6 +134,9 @@ def cl_save(
     # 1. 로그인하지 않았으면 401
     if user_id is None:
         raise HTTPException(status_code=401, detail="로그인 후 저장할 수 있어요.")
+    # 1-1. 문서 저장에 동의하지 않았으면 403
+    if not db.get(User, user_id).save_agreed:
+        raise HTTPException(status_code=403, detail="문서 저장 동의 후 저장할 수 있어요. 마이페이지에서 동의를 바꿔 주세요.")
     # 2. 제목 확인 (DB의 제목 칸은 비울 수 없고 200자까지)
     title = body.title.strip()
     if not title or len(title) > 200:

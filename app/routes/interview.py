@@ -1,4 +1,5 @@
 import hashlib
+import json
 import re
 import pymupdf
 import pymupdf4llm
@@ -23,16 +24,36 @@ SEARCH_QUERIES = {
     "입사 후 포부": "입사 후 포부 목표 성장 계획 기여 비전 다짐",
 }
 
-@router.post("/question", summary="첫 질문 생성 (서류 업로드)")
-def first_question(
-    job: str = Form(...),
-    resume_pdf: UploadFile = File(None),
-    my_resume: str = Form(None),
-    cl_pdf: UploadFile = File(None),
-    my_cl: str = Form(None),
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
+# 면접 API 입력 형식 (키가 빠지면 422로 거절)
+class AnswerIn(BaseModel):
+    category: str
+    job: str
+    filenames: list[str] = []
+    previous_dialogues: list[dict] = []  # local.py에서 d.get()으로 읽어서 dict 유지
+
+
+class FollowupIn(BaseModel):
+    category: str
+    job: str
+    question: str
+    answer: str
+    filenames: list[str] = []
+    used_evidences: list[str] = []
+
+
+class VerifyIn(BaseModel):
+    answer: str
+    filenames: list[str] = []
+
+# 서류 텍스트 추출, 청킹, 임베딩 및 DB 저장 함수
+def process_docs(
+    db: Session,
+    user_id: str,
+    resume_pdf: UploadFile | None = None,
+    my_resume: str | None = None,
+    cl_pdf: UploadFile | None = None,
+    my_cl: str | None = None,
+) -> list[str]:
     filenames = []
 
     if resume_pdf:
@@ -40,46 +61,92 @@ def first_question(
         if len(resume_bytes) > MAX_PDF_SIZE:
             raise HTTPException(status_code=400, detail="이력서 PDF 파일 크기는 10MB 이하여야 합니다.")
         resume_text = extract_text(resume_bytes)
-        filenames.append(save_pdf(db, user.id, "resume", resume_pdf.filename, resume_bytes, resume_text))
+        filenames.append(save_pdf(db, user_id, "resume", resume_pdf.filename, resume_bytes, resume_text))
     elif my_resume:
-        filenames.append(save_pdf(db, user.id, "resume", "my_resume", my_resume.encode(), my_resume))
+        filenames.append(save_pdf(db, user_id, "resume", "my_resume", my_resume.encode(), my_resume))
 
     if cl_pdf:
         cl_bytes = cl_pdf.file.read()
         if len(cl_bytes) > MAX_PDF_SIZE:
             raise HTTPException(status_code=400, detail="자기소개서 PDF 파일 크기는 10MB 이하여야 합니다.")
         cl_text = extract_text(cl_bytes)
-        filenames.append(save_pdf(db, user.id, "cl", cl_pdf.filename, cl_bytes, cl_text))
+        filenames.append(save_pdf(db, user_id, "cl", cl_pdf.filename, cl_bytes, cl_text))
     elif my_cl:
-        filenames.append(save_pdf(db, user.id, "cl", "my_cl", my_cl.encode(), my_cl))
+        filenames.append(save_pdf(db, user_id, "cl", "my_cl", my_cl.encode(), my_cl))
 
-    evidences = search_chunks(db, user.id, filenames, "지원 동기")
+    return filenames
+
+
+@router.post("/upload", summary="서류 업로드 및 청킹/임베딩 저장")
+def upload_docs(
+    resume_pdf: UploadFile = File(None),
+    my_resume: str = Form(None),
+    cl_pdf: UploadFile = File(None),
+    my_cl: str = Form(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    filenames = process_docs(
+        db, user.id, resume_pdf=resume_pdf, my_resume=my_resume, cl_pdf=cl_pdf, my_cl=my_cl
+    )
+    return {"filenames": filenames}
+
+
+@router.post("/question", summary="첫 질문 생성 (사전 업로드 파일명)")
+def first_question(
+    job: str = Form(...),
+    resume_pdf: UploadFile = File(None),
+    my_resume: str = Form(None),
+    cl_pdf: UploadFile = File(None),
+    my_cl: str = Form(None),
+    filenames: list[str] = Form(None),
+    filenames_json: str = Form(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    target_filenames = []
+    if filenames:
+        target_filenames.extend(filenames)
+    elif filenames_json:
+        try:
+            parsed = json.loads(filenames_json)
+            if isinstance(parsed, list):
+                target_filenames.extend([str(item) for item in parsed if item])
+        except Exception:
+            pass
+
+    # 전달된 filenames가 없으면 직접 파일 처리
+    if not target_filenames:
+        target_filenames = process_docs(
+            db, user.id, resume_pdf=resume_pdf, my_resume=my_resume, cl_pdf=cl_pdf, my_cl=my_cl
+        )
+
+    evidences = search_chunks(db, user.id, target_filenames, "지원 동기")
     result = ask_question("지원 동기", job, evidences)
     return {
         "question": result["question"],
         "evidences": result["evidences"],
-        "filenames": filenames,
-    }  # 프론트에 전달
+        "filenames": target_filenames,
+    }
 
 
 @router.post("/answer", summary="다음 카테고리 질문 생성")
-def submit_answer(data: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    filenames = data.get("filenames", [])
-    evidences = search_chunks(db, user.id, filenames, data["category"])
+def submit_answer(data: AnswerIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    evidences = search_chunks(db, user.id, data.filenames, data.category)
 
     job_units = []
-    if data["category"] == "경험 및 역량" and not evidences:
-        job_units = search_job_units(db, data["job"], data["job"])
+    if data.category == "경험 및 역량" and not evidences:
+        job_units = search_job_units(db, data.job, data.job)
 
     # 이전 대화 내용과 겹치지 않도록 대화 내역 전달
-    previous_dialogues = data.get("previous_dialogues", [])
     result = ask_question(
-        data["category"],
-        data["job"],
+        data.category,
+        data.job,
         evidences,
         job_units,
-        previous_dialogues=previous_dialogues,
+        previous_dialogues=data.previous_dialogues,
     )
+
     return {
         "question": result["question"],
         "evidences": result["evidences"],
@@ -88,18 +155,18 @@ def submit_answer(data: dict, db: Session = Depends(get_db), user: User = Depend
 
 # 심층 질문 생성 여부 판단 및 질문 반환
 @router.post("/followup", summary="심층질문 생성 여부 판단")
-def followup_question(data: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    filenames = data.get("filenames", [])
-    evidences = search_chunks(db, user.id, filenames, data["category"], top_k=3)
+def followup_question(data: FollowupIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    evidences = search_chunks(db, user.id, data.filenames, data.category, top_k=3)
 
     result = ask_followup_question(
-        category=data["category"],
-        job=data["job"],
-        question=data["question"],
-        answer=data["answer"],
+        category=data.category,
+        job=data.job,
+        question=data.question,
+        answer=data.answer,
         evidences=evidences,
-        used_evidences=data.get("used_evidences", []),
+        used_evidences=data.used_evidences,
     )
+
     return {
         "is_followup": result["need_followup"],
         "question": result["question"],
@@ -138,18 +205,17 @@ def save_interview(body: InterviewSave, db: Session = Depends(get_db), user: Use
 VERIFY_MAX_DISTANCE = 0.50
 
 @router.post("/verify", summary="답변-서류 불일치 검사")
-def verify_answer(data: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    filenames = data.get("filenames", [])
+def verify_answer(data: VerifyIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
 
     # 답변을 문장으로 나누고, 문장마다 가장 가까운 서류 조각 1개를 찾는다
     # 같은 조각을 가리키는 문장끼리 묶어서, 관련 있는 조각하고만 비교한다
     # 거리가 너무 먼 문장은 서류에 없는 새로운 내용(부가 설명)으로 간주하여 검증에서 제외한다
-    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", data["answer"]) if s.strip()]
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", data.answer) if s.strip()]
     groups = {}  # 조각 번호 -> (조각, 그 조각과 비교할 문장들)
     for sentence in sentences:
         if len(sentence) < 8:  # 너무 짧은 추임새나 단답은 매칭 제외
             continue
-        for row in search_rows(db, user.id, filenames, sentence, top_k=1, max_distance=VERIFY_MAX_DISTANCE):
+        for row in search_rows(db, user.id, data.filenames, sentence, top_k=1, max_distance=VERIFY_MAX_DISTANCE):
             groups.setdefault(row.chunk_id, (row, []))[1].append(sentence)
 
     mismatches = []
