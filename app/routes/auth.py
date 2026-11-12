@@ -194,20 +194,12 @@ def current_user_option(
 ) -> Optional[User]:
     """
     [비회원 허용 API에서 사용]
-    - 토큰이 있으면 User 모델 반환, 없거나 만료되었으면 None 반환
+    - 토큰이 없으면 None 반환 (비회원)
+    - 토큰이 있는데 만료/위조/없는 회원이면 401 (조용히 비회원 처리하지 않음)
     """
     if not credentials:
         return None
-    try:
-        payload = jwt.decode(
-            credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM]
-        )
-        user_id = payload.get("sub")
-        if not user_id:
-            return None
-        return db.query(User).filter(User.id == user_id).first()
-    except jwt.PyJWTError:
-        return None
+    return get_current_user(credentials, db)
 
 
 def current_user_id(
