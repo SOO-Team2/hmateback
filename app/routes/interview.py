@@ -134,16 +134,22 @@ def save_interview(body: InterviewSave, db: Session = Depends(get_db), user: Use
         raise HTTPException(status_code=500, detail="저장하지 못했습니다.")
     return {"interview_id": interview.interview_id}
 
+# 답변 문장과 서류 간 최대 허용 코사인 거리 (거리가 이보다 멀면 서류에 없는 새로운 부가 설명으로 판단하여 검증 제외)
+VERIFY_MAX_DISTANCE = 0.50
+
 @router.post("/verify", summary="답변-서류 불일치 검사")
 def verify_answer(data: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     filenames = data.get("filenames", [])
 
     # 답변을 문장으로 나누고, 문장마다 가장 가까운 서류 조각 1개를 찾는다
     # 같은 조각을 가리키는 문장끼리 묶어서, 관련 있는 조각하고만 비교한다
+    # 거리가 너무 먼 문장은 서류에 없는 새로운 내용(부가 설명)으로 간주하여 검증에서 제외한다
     sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", data["answer"]) if s.strip()]
     groups = {}  # 조각 번호 -> (조각, 그 조각과 비교할 문장들)
     for sentence in sentences:
-        for row in search_rows(db, user.id, filenames, sentence, top_k=1):
+        if len(sentence) < 8:  # 너무 짧은 추임새나 단답은 매칭 제외
+            continue
+        for row in search_rows(db, user.id, filenames, sentence, top_k=1, max_distance=VERIFY_MAX_DISTANCE):
             groups.setdefault(row.chunk_id, (row, []))[1].append(sentence)
 
     mismatches = []

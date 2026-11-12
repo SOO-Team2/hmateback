@@ -259,6 +259,37 @@ def ask_followup_question(
 
 
 
+# AI 추출 결과의 코드 레벨 오탐(False Positive) 검증
+def is_false_positive(mismatch: dict, context: str, answer_full: str) -> bool:
+  doc = str(mismatch.get("document", "")).strip()
+  ans = str(mismatch.get("answer", "")).strip()
+  if not doc or not ans:
+    return True
+
+  # 1. 구절이 완전히 동일한 경우
+  if doc == ans:
+    return True
+
+  norm_doc = re.sub(r"[\s\.,·~!?]", "", doc)
+  norm_ans = re.sub(r"[\s\.,·~!?]", "", ans)
+  norm_full = re.sub(r"[\s\.,·~!?]", "", answer_full)
+  norm_ctx = re.sub(r"[\s\.,·~!?]", "", context)
+
+  # 2. 기호/공백 제거 후 일치
+  if norm_doc == norm_ans:
+    return True
+
+  # 3. 서류 구절(4자 이상)이 답변 속에 그대로 포함되어 있는 경우 (서류 내용을 그대로 답변한 경우)
+  if len(norm_doc) >= 4 and (norm_doc in norm_ans or norm_doc in norm_full):
+    return True
+
+  # 4. 답변 구절(4자 이상)이 서류 원문에 그대로 존재하는 경우
+  if len(norm_ans) >= 4 and norm_ans in norm_ctx:
+    return True
+
+  return False
+
+
 # 답변과 서류 비교
 def check_answer(answer: str, evidences: list[str]) -> list[dict]:
   if not evidences:
@@ -273,7 +304,11 @@ def check_answer(answer: str, evidences: list[str]) -> list[dict]:
 {answer}
 """
   result = call_llm(VERIFY_PROMPT, user_content)
-  return [m for m in result.get("mismatches", []) if is_conflict(m, context, answer)]
+  mismatches = result.get("mismatches", [])
+  return [
+    m for m in mismatches
+    if not is_false_positive(m, context, answer) and is_conflict(m, context, answer)
+  ]
 
 
 # 2차 확인: 두 내용이 동시에 사실일 수 없을 때만 불일치로 인정
