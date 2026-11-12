@@ -23,6 +23,27 @@ SEARCH_QUERIES = {
     "입사 후 포부": "입사 후 포부 목표 성장 계획 기여 비전 다짐",
 }
 
+# 면접 API 입력 형식 (키가 빠지면 422로 거절)
+class AnswerIn(BaseModel):
+    category: str
+    job: str
+    filenames: list[str] = []
+    previous_dialogues: list[dict] = []  # local.py에서 d.get()으로 읽어서 dict 유지
+
+
+class FollowupIn(BaseModel):
+    category: str
+    job: str
+    question: str
+    answer: str
+    filenames: list[str] = []
+    used_evidences: list[str] = []
+
+
+class VerifyIn(BaseModel):
+    answer: str
+    filenames: list[str] = []
+
 @router.post("/question", summary="첫 질문 생성 (서류 업로드)")
 def first_question(
     job: str = Form(...),
@@ -63,23 +84,22 @@ def first_question(
 
 
 @router.post("/answer", summary="다음 카테고리 질문 생성")
-def submit_answer(data: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    filenames = data.get("filenames", [])
-    evidences = search_chunks(db, user.id, filenames, data["category"])
+def submit_answer(data: AnswerIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    evidences = search_chunks(db, user.id, data.filenames, data.category)
 
     job_units = []
-    if data["category"] == "경험 및 역량" and not evidences:
-        job_units = search_job_units(db, data["job"], data["job"])
+    if data.category == "경험 및 역량" and not evidences:
+        job_units = search_job_units(db, data.job, data.job)
 
     # 이전 대화 내용과 겹치지 않도록 대화 내역 전달
-    previous_dialogues = data.get("previous_dialogues", [])
     result = ask_question(
-        data["category"],
-        data["job"],
+        data.category,
+        data.job,
         evidences,
         job_units,
-        previous_dialogues=previous_dialogues,
+        previous_dialogues=data.previous_dialogues,
     )
+
     return {
         "question": result["question"],
         "evidences": result["evidences"],
@@ -88,18 +108,18 @@ def submit_answer(data: dict, db: Session = Depends(get_db), user: User = Depend
 
 # 심층 질문 생성 여부 판단 및 질문 반환
 @router.post("/followup", summary="심층질문 생성 여부 판단")
-def followup_question(data: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    filenames = data.get("filenames", [])
-    evidences = search_chunks(db, user.id, filenames, data["category"], top_k=3)
+def followup_question(data: FollowupIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    evidences = search_chunks(db, user.id, data.filenames, data.category, top_k=3)
 
     result = ask_followup_question(
-        category=data["category"],
-        job=data["job"],
-        question=data["question"],
-        answer=data["answer"],
+        category=data.category,
+        job=data.job,
+        question=data.question,
+        answer=data.answer,
         evidences=evidences,
-        used_evidences=data.get("used_evidences", []),
+        used_evidences=data.used_evidences,
     )
+
     return {
         "is_followup": result["need_followup"],
         "question": result["question"],
@@ -135,15 +155,14 @@ def save_interview(body: InterviewSave, db: Session = Depends(get_db), user: Use
     return {"interview_id": interview.interview_id}
 
 @router.post("/verify", summary="답변-서류 불일치 검사")
-def verify_answer(data: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    filenames = data.get("filenames", [])
+def verify_answer(data: VerifyIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
 
     # 답변을 문장으로 나누고, 문장마다 가장 가까운 서류 조각 1개를 찾는다
     # 같은 조각을 가리키는 문장끼리 묶어서, 관련 있는 조각하고만 비교한다
-    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", data["answer"]) if s.strip()]
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", data.answer) if s.strip()]
     groups = {}  # 조각 번호 -> (조각, 그 조각과 비교할 문장들)
     for sentence in sentences:
-        for row in search_rows(db, user.id, filenames, sentence, top_k=1):
+        for row in search_rows(db, user.id, data.filenames, sentence, top_k=1):
             groups.setdefault(row.chunk_id, (row, []))[1].append(sentence)
 
     mismatches = []
