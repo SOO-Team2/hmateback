@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import PdfChunk, JobUnit, User, Interview, Dialogue
-from app.routes.auth import get_current_user
+from app.routes.auth import get_current_user, current_user_id
 from app.ai.local import chunking, embed, ask_question, check_answer, ask_followup_question
 
 router = APIRouter(tags=["AI 면접"])
@@ -48,12 +48,16 @@ class VerifyIn(BaseModel):
 # 서류 텍스트 추출, 청킹, 임베딩 및 DB 저장 함수
 def process_docs(
     db: Session,
-    user_id: str,
+    user_id: str | None,
     resume_pdf: UploadFile | None = None,
     my_resume: str | None = None,
     cl_pdf: UploadFile | None = None,
     my_cl: str | None = None,
 ) -> list[str]:
+    # 비회원은 서류를 DB에 저장하지 않음
+    if not user_id:
+        return []
+
     filenames = []
 
     if resume_pdf:
@@ -84,10 +88,12 @@ def upload_docs(
     cl_pdf: UploadFile = File(None),
     my_cl: str = Form(None),
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user_id: str | None = Depends(current_user_id),
 ):
+    if not user_id:
+        return {"filenames": []}
     filenames = process_docs(
-        db, user.id, resume_pdf=resume_pdf, my_resume=my_resume, cl_pdf=cl_pdf, my_cl=my_cl
+        db, user_id, resume_pdf=resume_pdf, my_resume=my_resume, cl_pdf=cl_pdf, my_cl=my_cl
     )
     return {"filenames": filenames}
 
@@ -102,26 +108,27 @@ def first_question(
     filenames: list[str] = Form(None),
     filenames_json: str = Form(None),
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user_id: str | None = Depends(current_user_id),
 ):
     target_filenames = []
-    if filenames:
-        target_filenames.extend(filenames)
-    elif filenames_json:
-        try:
-            parsed = json.loads(filenames_json)
-            if isinstance(parsed, list):
-                target_filenames.extend([str(item) for item in parsed if item])
-        except Exception:
-            pass
+    if user_id:
+        if filenames:
+            target_filenames.extend(filenames)
+        elif filenames_json:
+            try:
+                parsed = json.loads(filenames_json)
+                if isinstance(parsed, list):
+                    target_filenames.extend([str(item) for item in parsed if item])
+            except Exception:
+                pass
 
-    # 전달된 filenames가 없으면 직접 파일 처리
-    if not target_filenames:
-        target_filenames = process_docs(
-            db, user.id, resume_pdf=resume_pdf, my_resume=my_resume, cl_pdf=cl_pdf, my_cl=my_cl
-        )
+        # 전달된 filenames가 없으면 직접 파일 처리
+        if not target_filenames:
+            target_filenames = process_docs(
+                db, user_id, resume_pdf=resume_pdf, my_resume=my_resume, cl_pdf=cl_pdf, my_cl=my_cl
+            )
 
-    evidences = search_chunks(db, user.id, target_filenames, "지원 동기")
+    evidences = search_chunks(db, user_id, target_filenames, "지원 동기") if user_id else []
     result = ask_question("지원 동기", job, evidences)
     return {
         "question": result["question"],
@@ -131,8 +138,12 @@ def first_question(
 
 
 @router.post("/answer", summary="다음 카테고리 질문 생성")
-def submit_answer(data: AnswerIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    evidences = search_chunks(db, user.id, data.filenames, data.category)
+def submit_answer(
+    data: AnswerIn,
+    db: Session = Depends(get_db),
+    user_id: str | None = Depends(current_user_id),
+):
+    evidences = search_chunks(db, user_id, data.filenames, data.category) if user_id else []
 
     job_units = []
     if data.category == "경험 및 역량" and not evidences:
@@ -155,8 +166,12 @@ def submit_answer(data: AnswerIn, db: Session = Depends(get_db), user: User = De
 
 # 심층 질문 생성 여부 판단 및 질문 반환
 @router.post("/followup", summary="심층질문 생성 여부 판단")
-def followup_question(data: FollowupIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    evidences = search_chunks(db, user.id, data.filenames, data.category, top_k=3)
+def followup_question(
+    data: FollowupIn,
+    db: Session = Depends(get_db),
+    user_id: str | None = Depends(current_user_id),
+):
+    evidences = search_chunks(db, user_id, data.filenames, data.category, top_k=3) if user_id else []
 
     result = ask_followup_question(
         category=data.category,
@@ -205,17 +220,30 @@ def save_interview(body: InterviewSave, db: Session = Depends(get_db), user: Use
 VERIFY_MAX_DISTANCE = 0.50
 
 @router.post("/verify", summary="답변-서류 불일치 검사")
-def verify_answer(data: VerifyIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def verify_answer(data: VerifyIn, db: Session = Depends(get_db), user_id: str | None = Depends(current_user_id)):
 
     # 답변을 문장으로 나누고, 문장마다 가장 가까운 서류 조각 1개를 찾는다
     # 같은 조각을 가리키는 문장끼리 묶어서, 관련 있는 조각하고만 비교한다
     # 거리(유사도)가 너무 먼 문장은 서류에 없는 새로운 내용으로 간주하여 검증에서 제외한다
     sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", data.answer) if s.strip()]
+    valid_sentences = [s for s in sentences if len(s) >= 8]  # 너무 짧은 추임새나 단답은 매칭 제외
+
+    if not user_id or not valid_sentences or not data.filenames:
+        return {"mismatches": []}
+
+    # 한 번에 배치 임베딩하여 Ollama 호출 횟수 단축
+    embedded_items = embed([{"content": s} for s in valid_sentences])
+
     groups = {}  # 조각 번호 -> (조각, 그 조각과 비교할 문장들)
-    for sentence in sentences:
-        if len(sentence) < 8:  # 너무 짧은 추임새나 단답은 매칭 제외
-            continue
-        for row in search_rows(db, user.id, data.filenames, sentence, top_k=1, max_distance=VERIFY_MAX_DISTANCE):
+    for item, sentence in zip(embedded_items, valid_sentences):
+        for row in search_rows(
+            db,
+            user_id,
+            data.filenames,
+            query_vec=item["embedding"],
+            top_k=1,
+            max_distance=VERIFY_MAX_DISTANCE,
+        ):
             groups.setdefault(row.chunk_id, (row, []))[1].append(sentence)
 
     mismatches = []
@@ -309,15 +337,20 @@ def search_rows(
     db: Session,
     user_id: str,
     filenames: list[str],
-    query: str,
+    query: str | None = None,
+    query_vec: list[float] | None = None,
     top_k: int = 1,
     max_distance: float | None = None,
 ) -> list[PdfChunk]:
     if not filenames or not user_id:
         return []
 
-    search_query = SEARCH_QUERIES.get(query, query)
-    query_vec = embed([{"content": search_query}])[0]["embedding"]
+    if query_vec is None:
+        if not query:
+            return []
+        search_query = SEARCH_QUERIES.get(query, query)
+        query_vec = embed([{"content": search_query}])[0]["embedding"]
+
     distance_expr = PdfChunk.embedding.cosine_distance(query_vec)
 
     q = db.query(PdfChunk).filter(

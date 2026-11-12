@@ -188,6 +188,37 @@ def get_current_user(
     return user
 
 
+def current_user_option(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme),
+    db: Session = Depends(get_db),
+) -> Optional[User]:
+    """
+    [비회원 허용 API에서 사용]
+    - 토큰이 있으면 User 모델 반환, 없거나 만료되었으면 None 반환
+    """
+    if not credentials:
+        return None
+    try:
+        payload = jwt.decode(
+            credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM]
+        )
+        user_id = payload.get("sub")
+        if not user_id:
+            return None
+        return db.query(User).filter(User.id == user_id).first()
+    except jwt.PyJWTError:
+        return None
+
+
+def current_user_id(
+    current_user: Optional[User] = Depends(current_user_option),
+) -> Optional[str]:
+    """
+    로그인한 유저의 ID 반환, 비회원이면 None 반환
+    """
+    return current_user.id if current_user else None
+
+
 # ==========================================
 # 4. 실제 API 엔드포인트
 # ==========================================

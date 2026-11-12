@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.ai.cloud import generate_feedback, generate_spelling, generate_titles
 from app.database import get_db
 from app.models import CL, Answer, User
-from app.routes.auth import get_current_user, security_scheme
+from app.routes.auth import current_user_id
 
 router = APIRouter(tags=["자기소개서"])                            # 이 파일 주소들을 담을 상자
 logger = logging.getLogger("uvicorn.error")     # 오류를 서버 터미널에 적는 도구
@@ -29,19 +29,6 @@ def check_length(sections, is_member=False):    # 글자 수 확인 (안 넘기�
     if sum(len(v) for v in data.values()) > limit:
         raise HTTPException(status_code=400, detail="글자 수 한도를 초과했습니다.")
     return data
-
-# 토큰이 있으면 로그인한 사용자 id, 없거나 만료됐으면 None(비회원)
-# auth.py의 get_current_user는 토큰이 없으면 401을 내서, 비회원도 쓰는 첨삭에는 그대로 못 씀
-def current_user_id(
-    credentials=Depends(security_scheme),
-    db: Session = Depends(get_db),
-):
-    if not credentials:
-        return None
-    try:
-        return get_current_user(credentials, db).id
-    except HTTPException:
-        return None
 
 # ---------------------------------------------------------------------------
 # 자소서 첨삭
