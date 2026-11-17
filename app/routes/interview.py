@@ -30,6 +30,7 @@ class AnswerIn(BaseModel):
     job: str
     filenames: list[str] = []
     previous_dialogues: list[dict] = []  # local.py에서 d.get()으로 읽어서 dict 유지
+    used_evidences: list[str] = []
 
 
 class FollowupIn(BaseModel):
@@ -147,7 +148,7 @@ def submit_answer(
     db: Session = Depends(get_db),
     user_id: str | None = Depends(current_user_id),
 ):
-    evidences = search_chunks(db, user_id, data.filenames, data.category) if user_id else []
+    evidences = search_chunks(db, user_id, data.filenames, data.category, top_k=3) if user_id else []
 
     job_units = []
     if data.category == "경험 및 역량" and not evidences:
@@ -160,6 +161,7 @@ def submit_answer(
         evidences,
         job_units,
         previous_dialogues=data.previous_dialogues,
+        used_evidences=data.used_evidences,
     )
 
     return {
