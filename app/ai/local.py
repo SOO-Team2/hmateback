@@ -20,22 +20,8 @@ EMBED_MODEL = os.getenv("EMBED_MODEL", "bge-m3")
 AI_TIMEOUT = int(os.getenv("AI_TIMEOUT", "60"))
 MAX_INPUT_TEXT_LENGTH = int(os.getenv("MAX_INPUT_TEXT_LENGTH", "10000"))
 
-# 응답값의 boolean 변환
-def to_bool(value, default: bool = False) -> bool:
-  if isinstance(value, bool): #이미 True/False 상태
-    return value
-  if isinstance(value, (int, float)):
-    return bool(value)
-  if isinstance(value, str):
-    val = value.strip().lower()
-    if val in ("true", "1", "yes", "t", "y"):
-      return True
-    if val in ("false", "0", "no", "f", "n"):
-      return False
-  return default
-
-# 참고 문장 필터링 (인적사항, 메타데이터 제외하고 서술형 줄글만)
-def is_narrative_sentence(text: str) -> bool:
+# 서술형 줄글만 남김 (인적사항, 메타데이터 제외)
+def is_narrative(text: str) -> bool:
   s = text.strip()
   # 1. 너무 짧은 단어나 단순 소제목
   if len(s) < 15:
@@ -51,22 +37,18 @@ def is_narrative_sentence(text: str) -> bool:
     return False
   return True
 
-# 원문 문장 분리 및 정제
-def clean_context_sentences(evidences: list[str], used_evidences: list[str] | None = None) -> tuple[list[str], str]:
-  target_evidences = evidences or []
-  if used_evidences and target_evidences:
-    unused = [ev for ev in target_evidences if ev not in used_evidences]
-    if unused:
-      target_evidences = unused
-
-  raw_sentences = [
+# 원문 분리 및 정제 (참고 문장용)
+def clean_sentences_context(chunks: list[str] | None = None) -> tuple[list[str], str]:
+  chunk_list = chunks or []
+  
+  sentences = [
     re.sub(r"\s+", " ", s).strip()
-    for ev in target_evidences
-    for s in re.split(r"(?<=[^0-9][.?!])\s+", ev)
+    for ck in chunk_list
+    for s in re.split(r"(?<=[^0-9][.?!])\s+", ck)
     if s.strip()
   ]
-  sentences = [s for s in raw_sentences if is_narrative_sentence(s)] or raw_sentences
-  context = "\n\n".join(sentences) if sentences else ("\n\n".join(target_evidences) if target_evidences else "없음")
+  sentences = [s for s in sentences if is_narrative(s)] or sentences
+  context = "\n\n".join(sentences) if sentences else ("\n\n".join(chunk_list) if chunk_list else "없음")
   return sentences, context
 
 # LLM 호출
@@ -88,11 +70,11 @@ def call_llm(prompt: str, content: str, temperature: float = 0.1) -> dict:
     timeout=AI_TIMEOUT
   )
   res.raise_for_status()
-  raw_content = res.json()["choices"][0]["message"]["content"].replace("。", ".")
+  result = res.json()["choices"][0]["message"]["content"].replace("。", ".")
   try:
-    return json.loads(raw_content)
+    return json.loads(result)
   except json.JSONDecodeError:
-    match = re.search(r"\{.*\}", raw_content, re.DOTALL)
+    match = re.search(r"\{.*\}", result, re.DOTALL)
     if match:
       return json.loads(match.group(0))
     raise
@@ -118,45 +100,41 @@ def embed(chunks):
 
   return chunks
 
-# 지원자 말투를 면접관 어투로 변환
-def fix_applicant_tone(text: str) -> str:
-  if not text:
-    return ""
-  s = str(text).strip()
-  # 1. 어미 변환
-  s = re.sub(r"지원하게\s*되었습니다", "지원하셨다고 작성해 주셨습니다", s)
-  s = re.sub(r"지원하게\s*된\s*것입니다", "지원하셨다고 작성해 주셨습니다", s)
-  s = re.sub(r"지원했습니다", "지원하셨다고 작성해 주셨습니다", s)
-
-  # 2. 호칭 및 대명사
-  s = re.sub(r"귀\s*사", "우리 회사", s)
-  s = re.sub(r"\b저희\s*회사\b", "우리 회사", s)
-  s = re.sub(r"(?<![가-힣])(?:제가|저는|저의|제)(?![가-힣])", "지원자님께서", s)
-
-  # 3. 문법 및 오탈자
-  s = s.replace("생각하신가요", "생각하시나요")
-  s = s.replace("느끼신가요", "느끼시나요")
-  return s.strip()
-
 # 과거 시제 종결 확인(종성이 ㅆ(쌍시옷))
 def has_ssangsiot_jongseong(ch: str) -> bool:
   if not ch or len(ch) != 1 or not ('\uac00' <= ch <= '\ud7a3'):
     return False
   return (ord(ch) - 0xAC00) % 28 == 20
 
-# 배경 문장 및 면접관 어조 보정 (~이었습니다 -> ~이었다고 작성해 주셨습니다 등)
-def format_background(bg: str | None) -> str:
-  if not bg or str(bg).strip().lower() in ("null", "none", ""):
+# 지원자 말투 -> 면접관 말투 변환
+def interviewer_tone(text: str | None, is_background: bool = False) -> str:
+  if not text or str(text).strip().lower() in ("null", "none", ""):
     return ""
-  s = fix_applicant_tone(str(bg)).strip()
+
+  s = str(text).strip()
+
+  # 1. 호칭
+  s = re.sub(r"귀\s*사", "우리 회사", s)
+  s = re.sub(r"\b저희\s*회사\b", "우리 회사", s)
+  s = re.sub(r"(?<![가-힣])(?:제가|저는|저의|제)(?![가-힣])", "지원자님께서", s)
+
+  # 2. 문법 및 오탈자 정돈
+  s = s.replace("생각하신가요", "생각하시나요")
+  s = s.replace("느끼신가요", "느끼시나요")
+
+  # 3. 의문문인 경우 어투 변환 X
+  if s.endswith("?") and not is_background:
+    return s
+
+  # 4. 평서문인 경우: 인용문 변환
   if not s.endswith((".", "!", "?")):
     s += "."
 
-  # 이미 인용 어투인 경우 유지
+  # 이미 인용 어투인 경우 그대로 유지
   if re.search(r"(?:작성|언급|소개|기재)(?:해\s*주|하)?셨(?:습니다|다고)", s):
     return s
 
-  # 1. ~이었습니다. / ~였습니다. (체언 + 서술격조사 과거형)
+  # 1) ~이었습니다. / ~였습니다. / ~이었다. / ~였다.
   if re.search(r"이었습니다\.$", s):
     return re.sub(r"이었습니다\.$", "이었다고 작성해 주셨습니다.", s)
   if re.search(r"였습니다\.$", s):
@@ -166,13 +144,13 @@ def format_background(bg: str | None) -> str:
   if re.search(r"였다\.$", s):
     return re.sub(r"였다\.$", "였다고 작성해 주셨습니다.", s)
 
-  # 2. ~입니다. / ~이다.
+  # 2) ~입니다. / ~이다.
   if re.search(r"([가-힣])입니다\.$", s):
     return re.sub(r"([가-힣])입니다\.$", r"\1이라고 작성해 주셨습니다.", s)
   if re.search(r"([가-힣])이다\.$", s):
     return re.sub(r"([가-힣])이다\.$", r"\1이라고 작성해 주셨습니다.", s)
 
-  # 3. 모든 과거형 종결어미: ~[ㅆ받침]습니다. (했습니다, 었습니다, 았습니다, 되었습니다, 받았습니다, 배웠습니다 등)
+  # 3) 모든 과거형 종결어미: ~[ㅆ받침]습니다. (했습니다, 었습니다, 았습니다, 되었습니다, 받았습니다, 배웠습니다 등)
   m = re.search(r"([가-힣])습니다\.$", s)
   if m and has_ssangsiot_jongseong(m.group(1)):
     return re.sub(r"([가-힣])습니다\.$", r"\1다고 작성해 주셨습니다.", s)
@@ -182,29 +160,31 @@ def format_background(bg: str | None) -> str:
   if m_plain and has_ssangsiot_jongseong(m_plain.group(1)):
     return re.sub(r"([가-힣])다\.$", r"\1다고 작성해 주셨습니다.", s)
 
-  # 4. 현재형: ~합니다. / ~한다.
+  # 4) 현재형: ~합니다. / ~한다.
   if re.search(r"합니다\.$", s):
     return re.sub(r"합니다\.$", "한다고 작성해 주셨습니다.", s)
   if re.search(r"한다\.$", s):
     return re.sub(r"한다\.$", "한다고 작성해 주셨습니다.", s)
 
-  # 5. ~하셨습니다.
+  # 5) ~하셨습니다.
   if re.search(r"하셨습니다\.$", s):
     return re.sub(r"하셨습니다\.$", "하셨다고 작성해 주셨습니다.", s)
 
   return s
 
-# LLM이 지정한 evidence를 매핑
-def match_evidence(cited: str | None, sentences: list[str]) -> list[str]:
-  if not cited or str(cited).strip().lower() in ("null", "none", ""):
+# LLM이 지정한 evidence 매핑
+def map_evidence(ev: str | None, sentences: list[str]) -> list[str]:
+  # 원문을 인용하지 않은 경우
+  if not ev or str(ev).strip().lower() in ("null", "none", ""):
     return []
-  cited_str = str(cited).strip()
-  # 1. 원문 문장 중 정확히 일치하거나 포함
+  
+  evidence = str(ev).strip()
+  # 1. 원문에서 정확히 일치하거나 포함
   for s in sentences:
-    if s == cited_str or cited_str in s or s in cited_str:
+    if s == evidence or ev in s or s in ev:
       return [s]
-  # 2. 약간의 변형이 있더라도 LLM이 지정한 문장
-  return [cited_str]
+  # 2. 약간의 변형이 있는 경우
+  return [evidence]
 
 # AI가 질문을 주지 못했을 때 쓰는 단계별 기본 질문
 DEFAULT_QUESTIONS = {
@@ -213,17 +193,17 @@ DEFAULT_QUESTIONS = {
   "인성 및 협업": "팀으로 일하면서 의견이 달랐던 경험이 있다면, 어떻게 해결하셨나요?",
   "입사 후 포부": "입사 후 이 직무에서 이루고 싶은 목표는 무엇인가요?",
 }
+
 # 5. 질문
 def ask_question(
   category: str,
   job: str,
-  evidences: list[str],
+  chunks: list[str],
   job_units: list[str] | None = None,
-  previous_dialogues: list[dict] | None = None,
-  used_evidences: list[str] | None = None,
+  previous_dialogue: list[dict] | None = None,
 ) -> dict:
   prompt = f"{QUESTION_COMMON}\n\n{QUESTION_PROMPTS[category]}\n질문은 반드시 한국어로만 작성하세요.\n"
-  sentences, context = clean_context_sentences(evidences, used_evidences)
+  sentences, context = clean_sentences_context(chunks)
 
   user_content = f"""
 [지원 직무]
@@ -232,71 +212,73 @@ def ask_question(
 [참고 원문]
 {context}
 """
-  if previous_dialogues:
-    dialogue_texts = []
-    for d in previous_dialogues:
+  if previous_dialogue:
+    messages = []
+
+    # 이전 대화에서 한 쌍(d = {"question": "...", "answer": "..."}) 꺼냄
+    for d in previous_dialogue:
       q = str(d.get("question", "")).strip()
       a = str(d.get("answer", "")).strip()
       if q and a:
-        dialogue_texts.append(f"Q: {q}\nA: {a}")
+        messages.append(f"Q: {q}\nA: {a}")
       elif q:
-        dialogue_texts.append(f"Q: {q}")
-    if dialogue_texts:
-      dialogue_block = "\n\n".join(dialogue_texts)
+        messages.append(f"Q: {q}")
+    if messages:
+      dialogue = "\n\n".join(messages)
       user_content += f"""
 [이전 면접 대화]
-{dialogue_block}
-※ 주의: 위 [이전 면접 대화]에 이미 나온 질문 의도나 지원자가 이미 답변에서 밝힌 내용은 다시 묻지 말고, 완전히 다른 새로운 관점의 질문을 생성하세요.
+{dialogue}
+※ 주의: [이전 면접 대화] Q에 나온 질문과 A에서 답변한 내용은 다시 묻지 마세요.
 """
 
   if job_units:
     prompt += JOB_UNIT_RULE
     user_content += "\n[직무 역량]\n" + "\n".join(job_units) + "\n"
 
-  result = call_llm(prompt, user_content, temperature=0.35)
-  raw_bg = result.get("background")
-  raw_q = str(result.get("question") or "")
+  result = call_llm(prompt, user_content, temperature=0.1)
+  bg = result.get("background")
+  q = str(result.get("question") or "")
 
-  # 질문이 비었거나 한자가 섞이면 1번 다시 요청
-  if not raw_q or re.search(r"[\u4e00-\u9fff]", raw_q) or (raw_bg and re.search(r"[\u4e00-\u9fff]", str(raw_bg))):
-    result = call_llm(prompt, user_content, temperature=0.35)
-    raw_bg = result.get("background")
-    raw_q = str(result.get("question") or "")
+  # 아래 3가지 경우에 해당하면 재시도
+  if not q or (bg and re.search(r"[\u4e00-\u9fff]", str(bg))) or re.search(r"[\u4e00-\u9fff]", q): # 한자 유니코드
+    result = call_llm(prompt, user_content, temperature=0.1)
+    bg = result.get("background")
+    q = str(result.get("question") or "")
 
-  if not raw_q:
-    raw_q = DEFAULT_QUESTIONS.get(category, "이 부분에 대해 조금 더 자세히 말씀해 주시겠어요?")
+  if not q:
+    q = DEFAULT_QUESTIONS.get(category, "이 부분에 대해 조금 더 자세히 말씀해 주시겠어요?")
 
-  # 말투 보정 및 결합
-  clean_q = fix_applicant_tone(raw_q)
-  clean_bg = format_background(raw_bg)
+  # 말투 보정
+  question = interviewer_tone(q)
+  background = interviewer_tone(bg, is_background=True)
 
-  # background가 비어있고 question에 2문장 이상 들어온 경우
-  if not clean_bg:
-    q_sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", clean_q) if s.strip()]
-    if len(q_sentences) >= 2:
-      clean_bg = format_background(" ".join(q_sentences[:-1]))
-      clean_q = q_sentences[-1]
+  # question 안에 배경과 질문 함께 들어온 경우
+  if not background:
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", question) if s.strip()]
+    if len(sentences) >= 2:
+      background = interviewer_tone(" ".join(sentences[:-1]), is_background=True)
+      question = interviewer_tone(sentences[-1])
 
-  if clean_bg:
-    final_question = f"{clean_bg} {clean_q}"
+  # 결합
+  if background:
+    final = f"{background} {question}"
   else:
-    final_question = clean_q
+    final = question
 
-  result["question"] = final_question
+  result["question"] = final
 
   # 참고 문장 매핑
-  raw_cited = result.get("cited_evidence")
-  result_sentences = match_evidence(raw_cited, sentences)
+  evidence = result.get("evidence")
+  output = map_evidence(evidence, sentences)
 
-  # 폴백: evidence가 누락되었으나 background가 생성된 경우
-  if not result_sentences and clean_bg and sentences:
+  # Fallback: evidence가 누락되었더라도 배경 문장으로 역추적
+  if not output and background and sentences:
     for s in sentences:
-      if s in clean_bg or clean_bg in s:
-        result_sentences = [s]
+      if s in background or background in s:
+        output = [s]
         break
 
-  result["evidences"] = result_sentences
-  result["used_evidence"] = bool(result_sentences)
+  result["evidences"] = output
   return result
 
 # ---------------------------------------------------------------------------
@@ -310,7 +292,6 @@ def ask_followup_question(
     question: str,
     answer: str,
     evidences: list[str] | None = None,
-    used_evidences: list[str] | None = None,
 ) -> dict:
     """
     지원자의 직전 질문과 답변을 분석하여 심층 질문을 생성하거나 건너뜁니다.
@@ -322,7 +303,7 @@ def ask_followup_question(
 
     # 1. 해당 카테고리에 맞는 심층질문 프롬프트 준비
     prompt = f"{FOLLOWUP_COMMON}\n\n[면접 단계: {category}]\n\n{FOLLOWUP_PROMPTS.get(category, '')}\n질문은 반드시 한국어로만 작성하세요.\n"
-    sentences, context = clean_context_sentences(evidences or [], used_evidences)
+    sentences, context = clean_sentences_context(evidences or [])
 
     # 2. LLM에 전달할 사용자 컨텍스트 구성
     user_content = f"""
@@ -356,7 +337,7 @@ def ask_followup_question(
             followup_q = "그 조율 과정에서 해당 소통 방식을 선택하신 이유는 무엇이었으며, 그 경험을 통해 협업에 대해 어떤 점을 배우셨나요?"
 
     # 6. 말투 필터링 및 1~2문장 질문 정제
-    followup_q = fix_applicant_tone(str(followup_q))
+    followup_q = interviewer_tone(str(followup_q))
     q_sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", followup_q) if s.strip()]
     # 3문장 이상 길어지면 최대 2문장 유지
     if len(q_sentences) > 2:
@@ -366,7 +347,7 @@ def ask_followup_question(
 
     # 7. 심층 질문의 참고 문장 매핑 (LLM이 cited_evidence를 지정한 경우)
     raw_cited = result.get("cited_evidence")
-    followup_evidences = match_evidence(raw_cited, sentences)
+    followup_evidences = map_evidence(raw_cited, sentences)
 
     return {
         "need_followup": True,

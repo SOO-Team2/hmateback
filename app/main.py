@@ -33,7 +33,7 @@ app = FastAPI(title="합격메이트 API", lifespan=lifespan)
 # 프론트엔드 연결
 app.add_middleware( #요청 검사
   CORSMiddleware, #다른 포트 번호 풀어줌
-  allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+  allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://52.62.27.250"],
   allow_methods=["*"], #GET, POST, PUT, DELETE 모두 허용
   allow_headers=["*"], #헤더 전부 허용
 )

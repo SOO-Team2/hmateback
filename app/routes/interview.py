@@ -29,8 +29,7 @@ class AnswerIn(BaseModel):
     category: str
     job: str
     filenames: list[str] = []
-    previous_dialogues: list[dict] = []  # local.py에서 d.get()으로 읽어서 dict 유지
-    used_evidences: list[str] = []
+    previous_dialogue: list[dict] = []  # local.py에서 d.get()으로 읽어서 dict 유지
 
 
 class FollowupIn(BaseModel):
@@ -39,7 +38,6 @@ class FollowupIn(BaseModel):
     question: str
     answer: str
     filenames: list[str] = []
-    used_evidences: list[str] = []
 
 
 class VerifyIn(BaseModel):
@@ -148,20 +146,21 @@ def submit_answer(
     db: Session = Depends(get_db),
     user_id: str | None = Depends(current_user_id),
 ):
-    evidences = search_chunks(db, user_id, data.filenames, data.category, top_k=3) if user_id else []
+    # ① [chunks]: 프론트가 준 category와 filenames로 DB 벡터 검색 수행
+    chunks = search_chunks(db, user_id, data.filenames, data.category, top_k=3) if user_id else []
 
+    # ② [job_units]: '경험 및 역량' 단계 && 서류 없음 -> DB에서 직무 역량 조회
     job_units = []
-    if data.category == "경험 및 역량" and not evidences:
+    if data.category == "경험 및 역량" and not chunks:
         job_units = search_job_units(db, data.job, data.job)
 
-    # 이전 대화 내용과 겹치지 않도록 대화 내역 전달
+    # ③ [local.py의 ask_question 호출]
     result = ask_question(
-        data.category,
-        data.job,
-        evidences,
-        job_units,
-        previous_dialogues=data.previous_dialogues,
-        used_evidences=data.used_evidences,
+        data.category,                          # 프론트가 보낸 카테고리
+        data.job,                               # 프론트가 보낸 직무
+        chunks,                                 # 백엔드가 DB에서 찾은 원문 청크들
+        job_units,                              # 백엔드가 DB에서 찾은 직무 역량
+        previous_dialogue=data.previous_dialogue, # 프론트가 보낸 이전 대화 내역
     )
 
     return {
@@ -185,7 +184,6 @@ def followup_question(
         question=data.question,
         answer=data.answer,
         evidences=evidences,
-        used_evidences=data.used_evidences,
     )
 
     return {
